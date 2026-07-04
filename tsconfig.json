@@ -12,9 +12,15 @@
     }
   },
   "include": [
-    "**/*.ts",
-    "**/*.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
     ".expo/types/**/*.ts",
     "expo-env.d.ts"
+  ],
+  "exclude": [
+    ".expo/types/**/*.d.ts",
+    "boulio",
+    "example",
+    "node_modules"
   ]
 }
