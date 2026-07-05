@@ -24,6 +24,9 @@ export type TopUpProduct = {
   label: string;
   price: number;
   serviceFee: number;
+  externalProvider?: string | null;
+  externalProductId?: string | null;
+  externalProductMetadata?: Record<string, unknown> | null;
 };
 
 export type TopUpOrder = {

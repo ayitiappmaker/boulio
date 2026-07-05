@@ -12,6 +12,7 @@ import { getCurrentSession, signOut, subscribeToSessionChanges } from '@/lib/aut
 import { fetchMyActivity } from '@/lib/activity';
 import { deleteSavedRecipient, fetchSavedRecipients, type SavedRecipientRecord } from '@/lib/savedRecipients';
 import type { DataRequestRecord } from '@/lib/dataRequests';
+import { getFulfillmentStatusLabel } from '@/lib/fulfillment';
 import { getLanguage, supportedLanguages, setLanguage, t, useLanguage } from '@/lib/i18n';
 import { fetchMyProfile, isProfileRequiredError, upsertMyProfile, type ProfileRecord } from '@/lib/profile';
 import { getStoredUserMode, setStoredUserMode, subscribeToUserModeChanges } from '@/lib/userMode';
@@ -558,7 +559,12 @@ function mapTopUpActivity(orders: TopUpOrderRecord[]): ActivityRowItem[] {
     recipientPhone: order.recipientPhone,
     productName: order.productName,
     totalUsd: order.totalUsd,
-    statusLabel: formatTopUpStatusLabel(order),
+    statusLabel: getFulfillmentStatusLabel({
+      targetType: 'topup_order',
+      status: order.status,
+      paymentStatus: order.paymentStatus,
+      supplierStatus: order.supplierStatus,
+    }),
     createdAt: order.createdAt,
   }));
 }
@@ -570,7 +576,13 @@ function mapDataRequestActivity(requests: DataRequestRecord[]): ActivityRowItem[
     recipientPhone: request.recipientPhone,
     productName: request.bundleLabel ?? request.productName,
     totalUsd: request.totalUsd,
-    statusLabel: formatDataRequestActivityStatusLabel(request),
+    statusLabel: getFulfillmentStatusLabel({
+      targetType: 'data_request',
+      publicStatus: request.publicStatus,
+      internalStatus: request.internalStatus,
+      paymentStatus: request.paymentStatus,
+      fulfillmentStatus: request.fulfillmentStatus,
+    }),
     createdAt: request.createdAt,
   }));
 }
@@ -581,101 +593,6 @@ function formatDate(value: string) {
 
 function formatMoney(value: number) {
   return `$${value.toFixed(2)}`;
-}
-
-function formatTopUpStatusLabel(order: TopUpOrderRecord) {
-  switch (order.paymentStatus) {
-    case 'unpaid':
-      return t('unpaid');
-    case 'pending':
-      return t('pendingPayment');
-    case 'paid':
-      return t('paid');
-    case 'failed':
-      return t('failed');
-    case 'refunded':
-      return t('cancelled');
-    default:
-      break;
-  }
-
-  switch (order.status) {
-    case 'completed':
-      return t('completed');
-    case 'processing':
-      return t('processing');
-    case 'paid':
-      return t('paid');
-    case 'failed':
-      return t('failed');
-    case 'cancelled':
-    case 'refunded':
-      return t('cancelled');
-    case 'draft':
-      return t('unpaid');
-    case 'pending_payment':
-      return t('pendingPayment');
-    default:
-      break;
-  }
-
-  switch (order.supplierStatus) {
-    case 'not_sent':
-      return t('notSent');
-    case 'pending':
-      return t('processing');
-    case 'successful':
-      return t('completed');
-    case 'failed':
-      return t('failed');
-    default:
-      return t('processing');
-  }
-}
-
-function formatDataRequestActivityStatusLabel(request: DataRequestRecord) {
-  switch (request.paymentStatus) {
-    case 'paid':
-      return t('paid');
-    case 'pending':
-      return t('pendingPayment');
-    case 'failed':
-      return t('failed');
-    case 'refunded':
-      return t('cancelled');
-    default:
-      break;
-  }
-
-  switch (request.internalStatus) {
-    case 'processing':
-      return t('processing');
-    case 'completed':
-      return t('completed');
-    case 'failed':
-      return t('failed');
-    case 'cancelled':
-      return t('cancelled');
-    case 'payment_pending':
-      return t('pendingPayment');
-    default:
-      break;
-  }
-
-  switch (request.publicStatus) {
-    case 'open':
-      return t('waitingForSupporter');
-    case 'paid':
-      return t('paid');
-    case 'completed':
-      return t('completed');
-    case 'expired':
-      return t('expired');
-    case 'cancelled':
-      return t('cancelled');
-    default:
-      return request.publicStatus;
-  }
 }
 
 function languageLabel(code: string) {
