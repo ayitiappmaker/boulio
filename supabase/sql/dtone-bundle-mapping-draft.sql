@@ -1,0 +1,73 @@
+-- Boulio DT One bundle/data mapping draft
+-- Safe draft only. Do not execute automatically.
+-- This file intentionally contains no UPDATE statements because the current
+-- Boulio bundle/data products do not have a clear, verified one-to-one match
+-- to the DT One bundle catalog entries provided.
+--
+-- Rules followed:
+-- - Do not map data products unless the match is clear and verified.
+-- - Do not use Open_Range products.
+-- - Do not guess by GB label alone.
+-- - Do not enable fulfillment.
+--
+-- Boulio seed bundle/data products:
+--   Digicel Data 1GB   (bundle_label: 1GB,  amount_usd: 6.00,  active: true)
+--   Digicel Data 3GB   (bundle_label: 3GB,  amount_usd: 12.00, active: true)
+--   Digicel Data 5GB   (bundle_label: 5GB,  amount_usd: 18.00, active: true)
+--   Digicel Data 10GB  (bundle_label: 10GB, amount_usd: 30.00, active: true)
+--   Natcom Data 1GB    (bundle_label: 1GB,  amount_usd: 6.00,  active: true)
+--   Natcom Data 3GB    (bundle_label: 3GB,  amount_usd: 12.00, active: true)
+--   Natcom Data 5GB    (bundle_label: 5GB,  amount_usd: 18.00, active: true)
+--   Natcom Data 10GB   (bundle_label: 10GB, amount_usd: 30.00, active: true)
+--
+-- DT One bundle IDs provided for review:
+--   Digicel Haiti:
+--     1975  - 7-Day Prepaid Plan, destination 5 USD, 7GB data, valid 7 days
+--     58256 - 7-Day PaleNet Extra, destination 15 USD, 20GB data, valid 7 days
+--     58254 - 15-Day Stay Connected Plan, destination 20 USD, 12GB total data, valid 15 days
+--     58255 - 30-Day Prepaid Plan, destination 24 USD, Unlimited data, valid 30 days
+--     58253 - 30-Day Stay Connected Plan, destination 25 USD, 16GB total data, valid 30 days
+--   Natcom Haiti:
+--     30165 - 30 GB 110 Minutes 15 Days, destination 10 USD, valid 15 days
+--     30166 - 60 GB 220 Minutes 30 Days, destination 20 USD, valid 30 days
+--     58222 - 90 GB 330 Minutes 30 Days, destination 30 USD, valid 30 days
+--     58221 - 200 GB Unlimited Minutes 30 Days, destination 50 USD, valid 30 days
+--
+-- No safe mappings were written because:
+-- - Boulio only exposes generic GB tiers, not the same bundled validity/minutes
+--   structure as the verified DT One products.
+-- - Matching by GB number alone would be too risky.
+-- - Matching by price alone would not be safe because the destination amount,
+--   validity, and extra bundle attributes do not line up clearly.
+--
+-- Leave these products unmapped until the DT One catalog review confirms an
+-- exact bundle match:
+--   Digicel Data 1GB
+--   Digicel Data 3GB
+--   Digicel Data 5GB
+--   Digicel Data 10GB
+--   Natcom Data 1GB
+--   Natcom Data 3GB
+--   Natcom Data 5GB
+--   Natcom Data 10GB
+--
+-- If a future verified catalog review produces an exact match, update only:
+--   external_provider = 'dtone'
+--   external_product_id = '<verified DT One bundle ID>'
+--   external_product_metadata = jsonb_build_object(...)
+--
+-- Example only; do not use until verified:
+-- UPDATE public.topup_products
+-- SET external_provider = 'dtone',
+--     external_product_id = 'TODO_DTONE_PRODUCT_ID',
+--     external_product_metadata = jsonb_build_object(
+--       'provider', 'dtone',
+--       'carrier', 'Natcom',
+--       'product_type', 'data',
+--       'boulio_product_name', 'Natcom Data 10GB',
+--       'bundle_label', '10GB',
+--       'dtone_product_name', 'TODO_DTONE_PRODUCT_NAME',
+--       'match_reason', 'Verified exact bundle match only'
+--     )
+-- WHERE id = 'TODO_BOULIO_PRODUCT_ID';
+

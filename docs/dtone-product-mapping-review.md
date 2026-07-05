@@ -19,6 +19,8 @@ catalog, dashboard, or API response.
 - Verify amount and bundle label before mapping.
 - Leave a product unmapped if you are uncertain.
 - The backend must refuse unmapped or uncertain products.
+- The old generic 1GB / 3GB / 5GB / 10GB bundle rows should not be fulfilled,
+  because they do not match the verified DT One bundle products closely enough.
 
 ## Suggested review fields
 
