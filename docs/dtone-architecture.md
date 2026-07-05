@@ -46,6 +46,26 @@ If a product is unmapped:
 - do not send a supplier request
 - show an internal message like "Needs product mapping"
 
+## Fulfillment readiness validation
+
+The placeholder fulfillment function should treat a row as ready only when:
+
+- the target exists
+- payment is confirmed
+- the row is in a processing-ready state
+- the mapped product exists and is active
+- the mapped product provider is `dtone`
+- the external product id is present
+- the carrier and product type match exactly
+- the amount matches the mapped product amount
+- the bundle label matches for data products
+
+If any of those checks fail, the backend should return a clear non-fulfillable
+status instead of trying to send the request.
+
+Unmapped products must never be sent to the supplier because that would risk
+sending the wrong service, wrong amount, or wrong carrier request.
+
 ## Required secrets later
 
 Store these only in Supabase secrets when the integration is ready:
