@@ -58,6 +58,7 @@ const englishTranslations = {
   carrierCouldNotBeDetected: 'We could not detect the carrier from this number. Please choose Digicel or Natcom.',
   confirmCarrier: 'Confirm carrier',
   change: 'Change',
+  close: 'Close',
   back: 'Back',
   backWithArrow: '← Back',
   continueWithArrow: 'Continue →',

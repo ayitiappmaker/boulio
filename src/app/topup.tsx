@@ -24,7 +24,6 @@ import { detectHaitiCarrierFromPhone } from '@/lib/carrierDetection';
 import type { Session } from '@supabase/supabase-js';
 import type { TopUpCarrier, TopUpProduct, UserMode } from '@/lib/types';
 
-type FlowMode = 'send' | 'request';
 type SendStep = 1 | 2 | 3;
 type RequestStep = 1 | 2 | 3 | 4 | 5;
 type SendProductType = 'airtime' | 'data';
@@ -45,7 +44,6 @@ export default function TopUpScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ mode?: string | string[] }>();
   useLanguage();
-  const [flowMode, setFlowMode] = useState<FlowMode>('send');
   const [session, setSession] = useState<Session | null>(null);
   const [products, setProducts] = useState<TopUpProduct[]>(mockTopUpProducts);
   const [productsLoading, setProductsLoading] = useState(true);
@@ -96,6 +94,7 @@ export default function TopUpScreen() {
   const [sendCarrierManual, setSendCarrierManual] = useState(false);
 
   const requestedMode = Array.isArray(params.mode) ? params.mode[0] : params.mode;
+  const requestModalVisible = requestedMode === 'request';
 
   useEffect(() => {
     let active = true;
@@ -121,15 +120,6 @@ export default function TopUpScreen() {
       active = false;
     };
   }, []);
-
-  useEffect(() => {
-    if (requestedMode === 'request') {
-      setFlowMode('request');
-      return;
-    }
-
-    setFlowMode('send');
-  }, [requestedMode]);
 
   useEffect(() => {
     let active = true;
@@ -423,8 +413,13 @@ export default function TopUpScreen() {
 
   const createAnotherRequest = () => {
     resetRequestFlow();
-    setFlowMode('send');
   };
+
+  useEffect(() => {
+    if (requestModalVisible) {
+      resetRequestFlow();
+    }
+  }, [requestModalVisible]);
 
   const selectSendRecipient = (recipient: SavedRecipientRecord) => {
     setSendCarrier(recipient.carrier);
@@ -692,12 +687,11 @@ export default function TopUpScreen() {
         </View>
       </Modal>
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-      <View style={styles.hero}>
-        <Text style={styles.title}>{t('topUpHaiti')}</Text>
-        <Text style={styles.subtitle}>{t('chooseAirtimeOrAnInternetBundle')}</Text>
-      </View>
+        <View style={styles.hero}>
+          <Text style={styles.title}>{t('topUpHaiti')}</Text>
+          <Text style={styles.subtitle}>{t('chooseAirtimeOrAnInternetBundle')}</Text>
+        </View>
 
-      {flowMode === 'send' ? (
         <View style={styles.flowStack}>
           <View style={styles.flowHeader}>
             <View style={styles.flowHeaderText}>
@@ -844,156 +838,184 @@ export default function TopUpScreen() {
               </View>
             </SectionCard>
           ) : null}
-
         </View>
-      ) : (
-        <View style={styles.flowStack}>
-          <View style={styles.flowHeader}>
-            <View style={styles.flowHeaderText}>
-              <Text style={styles.flowLabel}>{requestStepLabel}</Text>
-              <Text style={styles.flowTitle}>{t('requestSocialData')}</Text>
-              <Text style={styles.flowSubtitle}>{t('createLinkFamilyCanPay')}</Text>
-            </View>
-          </View>
-
-          {requestStep === 1 ? (
-            <SectionCard title={t('chooseCarrier')} subtitle={t('chooseCarrier')}>
-              <View style={styles.sectionStack}>
-                <ChipSelector value={requestCarrier} options={carrierOptions} onChange={changeRequestCarrier} />
-                <View style={styles.actionRow}>
-                  <PrimaryButton
-                    label={t('backWithArrow')}
-                    onPress={() => router.back()}
-                    style={styles.actionButtonFlex}
-                  />
-                  <PrimaryButton
-                    label={t('continueWithArrow')}
-                    onPress={() => setRequestStep(2)}
-                    style={styles.actionButtonFlex}
-                  />
-                </View>
-              </View>
-            </SectionCard>
-          ) : null}
-
-          {requestStep === 2 ? (
-            <SectionCard title={t('socialData')} subtitle={t('chooseSocialDataProducts')}>
-              <View style={styles.sectionStack}>
-                <View style={styles.inputGroup}>
-                  <TextInput
-                    value={requestProductSearch}
-                    onChangeText={setRequestProductSearch}
-                    placeholder={t('searchProducts')}
-                    placeholderTextColor={Colors.light.muted}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    clearButtonMode="while-editing"
-                    style={styles.input}
-                  />
-                </View>
-                <View style={styles.productGrid}>
-                  {filteredRequestProducts.length ? (
-                    filteredRequestProducts.map((product) => (
-                      <TopUpAmountCard
-                        key={product.id}
-                        product={product}
-                        selected={product.id === selectedRequestProductId}
-                        onPress={() => {
-                          setSelectedRequestProductId(product.id);
-                          setRequestCarrier(product.carrier);
-                          setRequestError(null);
-                          setRequestStep(3);
-                        }}
-                      />
-                    ))
-                  ) : (
-                    <Text style={styles.emptyText}>{t('noMatchingProducts')}</Text>
-                  )}
-                </View>
-              </View>
-            </SectionCard>
-          ) : null}
-
-          {requestStep === 3 ? (
-            <SectionCard title={t('enterHaitiPhoneNumber')} subtitle={t('enterHaitiPhoneNumber')}>
-              <View style={styles.sectionStack}>
-                <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>{t('phoneNumber')}</Text>
-                  <TextInput
-                    value={requestPhoneNumber}
-                    onChangeText={(value) => {
-                      setRequestPhoneNumber(value);
-                      setRequestSelectedRecipientId(null);
-                      setRequestError(null);
-                    }}
-                    placeholder="e.g. (509) 34-12-44-11"
-                    placeholderTextColor={Colors.light.muted}
-                    keyboardType="phone-pad"
-                    textContentType="telephoneNumber"
-                    style={styles.input}
-                  />
-                </View>
-                {requestRecipientMessage ? <Text style={styles.noteText}>{requestRecipientMessage}</Text> : null}
-                <PrimaryButton
-                  label={t('continue')}
-                  onPress={() => setRequestStep(4)}
-                  disabled={!requestPhoneNumber.trim()}
-                />
-              </View>
-            </SectionCard>
-          ) : null}
-
-          {requestStep === 4 ? (
-            <SectionCard title={t('reviewRequest')} subtitle={t('familyReviewBeforeContinuing')}>
-              <View style={styles.sectionStack}>
-                <View style={styles.summaryCard}>
-                  {requestReviewSummary.map((row) => (
-                    <SummaryRow key={row.label} label={row.label} value={row.value} strong={row.strong} />
-                  ))}
-                </View>
-                {requestEditNote ? <Text style={styles.editNoteText}>{requestEditNote}</Text> : null}
-                {!isSignedIn ? (
-                  <>
-                    <Text style={styles.warningText}>{t('signInRequiredBeforeRequestLink')}</Text>
-                    <PrimaryButton label={t('goToAccount')} onPress={() => router.push('/account')} />
-                  </>
-                ) : (
-                  <>
-                    {requestError ? <Text style={styles.errorText}>{requestError}</Text> : null}
-                    <PrimaryButton
-                      label={t('createRequestLink')}
-                      onPress={createRequest}
-                      disabled={requestBusy || !selectedRequestProduct}
-                    />
-                  </>
-                )}
-              </View>
-            </SectionCard>
-          ) : null}
-
-          {requestStep === 5 ? (
-            <SectionCard title={t('requestLinkCreated')} subtitle={t('requestLinkCreatedSubtitle')}>
-              <View style={styles.sectionStack}>
-                <Text style={styles.bodyText}>{t('requestLinkReadyShare')}</Text>
-                {requestLink ? <Text style={styles.linkText}>{requestLink}</Text> : null}
-                {requestStatus ? <Text style={styles.noteText}>{requestStatus}</Text> : null}
-                {requestRecipientMessage ? <Text style={styles.noteText}>{requestRecipientMessage}</Text> : null}
-                {requestPaymentNotice ? <Text style={styles.noteText}>{requestPaymentNotice}</Text> : null}
-                <Text style={styles.editNoteText}>{t('onlinePaymentWillBeConnectedSoon')}</Text>
-                <View style={styles.shareGrid}>
-                  <SharePill label={t('whatsapp')} onPress={() => setRequestStatus('WhatsApp share placeholder.')} />
-                  <SharePill label={t('sms')} onPress={() => setRequestStatus('SMS share placeholder.')} />
-                  <SharePill label={t('messenger')} onPress={() => setRequestStatus('Messenger share placeholder.')} />
-                  <SharePill label={t('copyLink')} onPress={handleCopyLink} />
-                </View>
-                <PrimaryButton label={t('copyLink')} onPress={handleCopyLink} />
-                <PrimaryButton label={t('createAnotherRequestButton')} onPress={createAnotherRequest} />
-              </View>
-            </SectionCard>
-          ) : null}
-        </View>
-      )}
       </ScrollView>
+
+      <Modal visible={requestModalVisible} transparent animationType="slide" onRequestClose={() => router.replace('/topup')}>
+        <View style={styles.requestModalOverlay}>
+          <View style={styles.requestModalSheet}>
+            <ScrollView contentContainerStyle={styles.requestModalContainer} showsVerticalScrollIndicator={false}>
+              <View style={styles.flowStack}>
+                <View style={styles.flowHeader}>
+                  <View style={styles.flowHeaderText}>
+                    <Text style={styles.flowLabel}>{requestStepLabel}</Text>
+                    <Text style={styles.flowTitle}>{t('requestSocialData')}</Text>
+                    <Text style={styles.flowSubtitle}>{t('createLinkFamilyCanPay')}</Text>
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => router.replace('/topup')}
+                    style={styles.modalHeaderCloseButton}>
+                    <Text style={styles.modalHeaderCloseText}>{t('close')}</Text>
+                  </Pressable>
+                </View>
+
+                {requestStep === 1 ? (
+                  <SectionCard title={t('chooseCarrier')} subtitle={t('chooseCarrier')}>
+                    <View style={styles.sectionStack}>
+                      <ChipSelector value={requestCarrier} options={carrierOptions} onChange={changeRequestCarrier} />
+                      <View style={styles.actionRow}>
+                        <PrimaryButton
+                          label={t('backWithArrow')}
+                          onPress={() => router.replace('/topup')}
+                          style={styles.actionButtonFlex}
+                        />
+                        <PrimaryButton
+                          label={t('continueWithArrow')}
+                          onPress={() => setRequestStep(2)}
+                          style={styles.actionButtonFlex}
+                        />
+                      </View>
+                    </View>
+                  </SectionCard>
+                ) : null}
+
+                {requestStep === 2 ? (
+                  <SectionCard title={t('socialData')} subtitle={t('chooseSocialDataProducts')}>
+                    <View style={styles.sectionStack}>
+                      <View style={styles.inputGroup}>
+                        <TextInput
+                          value={requestProductSearch}
+                          onChangeText={setRequestProductSearch}
+                          placeholder={t('searchProducts')}
+                          placeholderTextColor={Colors.light.muted}
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                          clearButtonMode="while-editing"
+                          style={styles.input}
+                        />
+                      </View>
+                      <View style={styles.productGrid}>
+                        {filteredRequestProducts.length ? (
+                          filteredRequestProducts.map((product) => (
+                            <TopUpAmountCard
+                              key={product.id}
+                              product={product}
+                              selected={product.id === selectedRequestProductId}
+                              onPress={() => {
+                                setSelectedRequestProductId(product.id);
+                                setRequestCarrier(product.carrier);
+                                setRequestError(null);
+                                setRequestStep(3);
+                              }}
+                            />
+                          ))
+                        ) : (
+                          <Text style={styles.emptyText}>{t('noMatchingProducts')}</Text>
+                        )}
+                      </View>
+                    </View>
+                  </SectionCard>
+                ) : null}
+
+                {requestStep === 3 ? (
+                  <SectionCard title={t('enterHaitiPhoneNumber')} subtitle={t('enterHaitiPhoneNumber')}>
+                    <View style={styles.sectionStack}>
+                      <View style={styles.inputGroup}>
+                        <Text style={styles.inputLabel}>{t('phoneNumber')}</Text>
+                        <TextInput
+                          value={requestPhoneNumber}
+                          onChangeText={(value) => {
+                            setRequestPhoneNumber(value);
+                            setRequestSelectedRecipientId(null);
+                            setRequestError(null);
+                          }}
+                          placeholder="e.g. (509) 34-12-44-11"
+                          placeholderTextColor={Colors.light.muted}
+                          keyboardType="phone-pad"
+                          textContentType="telephoneNumber"
+                          style={styles.input}
+                        />
+                      </View>
+                      {requestRecipientMessage ? <Text style={styles.noteText}>{requestRecipientMessage}</Text> : null}
+                      <View style={styles.actionRow}>
+                        <PrimaryButton
+                          label={t('backWithArrow')}
+                          onPress={() => setRequestStep(2)}
+                          style={styles.actionButtonFlex}
+                        />
+                        <PrimaryButton
+                          label={t('continueWithArrow')}
+                          onPress={() => setRequestStep(4)}
+                          disabled={!requestPhoneNumber.trim()}
+                          style={styles.actionButtonFlex}
+                        />
+                      </View>
+                    </View>
+                  </SectionCard>
+                ) : null}
+
+                {requestStep === 4 ? (
+                  <SectionCard title={t('reviewRequest')} subtitle={t('familyReviewBeforeContinuing')}>
+                    <View style={styles.sectionStack}>
+                      <View style={styles.summaryCard}>
+                        {requestReviewSummary.map((row) => (
+                          <SummaryRow key={row.label} label={row.label} value={row.value} strong={row.strong} />
+                        ))}
+                      </View>
+                      {requestEditNote ? <Text style={styles.editNoteText}>{requestEditNote}</Text> : null}
+                      {!isSignedIn ? (
+                        <>
+                          <Text style={styles.warningText}>{t('signInRequiredBeforeRequestLink')}</Text>
+                          <PrimaryButton label={t('goToAccount')} onPress={() => router.push('/account')} />
+                        </>
+                      ) : (
+                        <>
+                          {requestError ? <Text style={styles.errorText}>{requestError}</Text> : null}
+                          <View style={styles.actionRow}>
+                            <PrimaryButton
+                              label={t('backWithArrow')}
+                              onPress={() => setRequestStep(3)}
+                              style={styles.actionButtonFlex}
+                            />
+                            <PrimaryButton
+                              label={t('createRequestLink')}
+                              onPress={createRequest}
+                              disabled={requestBusy || !selectedRequestProduct}
+                              style={styles.actionButtonFlex}
+                            />
+                          </View>
+                        </>
+                      )}
+                    </View>
+                  </SectionCard>
+                ) : null}
+
+                {requestStep === 5 ? (
+                  <SectionCard title={t('requestLinkCreated')} subtitle={t('requestLinkCreatedSubtitle')}>
+                    <View style={styles.sectionStack}>
+                      <Text style={styles.bodyText}>{t('requestLinkReadyShare')}</Text>
+                      {requestLink ? <Text style={styles.linkText}>{requestLink}</Text> : null}
+                      {requestStatus ? <Text style={styles.noteText}>{requestStatus}</Text> : null}
+                      {requestRecipientMessage ? <Text style={styles.noteText}>{requestRecipientMessage}</Text> : null}
+                      {requestPaymentNotice ? <Text style={styles.noteText}>{requestPaymentNotice}</Text> : null}
+                      <Text style={styles.editNoteText}>{t('onlinePaymentWillBeConnectedSoon')}</Text>
+                      <View style={styles.shareGrid}>
+                        <SharePill label={t('whatsapp')} onPress={() => setRequestStatus('WhatsApp share placeholder.')} />
+                        <SharePill label={t('sms')} onPress={() => setRequestStatus('SMS share placeholder.')} />
+                        <SharePill label={t('messenger')} onPress={() => setRequestStatus('Messenger share placeholder.')} />
+                        <SharePill label={t('copyLink')} onPress={handleCopyLink} />
+                      </View>
+                      <PrimaryButton label={t('copyLink')} onPress={handleCopyLink} />
+                      <PrimaryButton label={t('createAnotherRequestButton')} onPress={createAnotherRequest} />
+                    </View>
+                  </SectionCard>
+                ) : null}
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </>
   );
 }
@@ -1303,6 +1325,17 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 4,
   },
+  modalHeaderCloseButton: {
+    paddingHorizontal: 0,
+    paddingVertical: 4,
+    marginTop: 2,
+  },
+  modalHeaderCloseText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: Colors.light.text,
+    fontWeight: '600',
+  },
   flowLabel: {
     fontSize: 12,
     lineHeight: 16,
@@ -1372,6 +1405,24 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     color: Colors.light.textSecondary,
     fontWeight: '600',
+  },
+  requestModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(17, 24, 39, 0.48)',
+    justifyContent: 'flex-end',
+  },
+  requestModalSheet: {
+    maxHeight: '92%',
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    backgroundColor: Colors.light.background,
+    overflow: 'hidden',
+  },
+  requestModalContainer: {
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.xxl,
+    gap: Spacing.md,
   },
   sectionStack: {
     gap: Spacing.sm,
