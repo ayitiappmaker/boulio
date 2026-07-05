@@ -42,6 +42,16 @@ Use careful product matching:
 - airtime
 - data
 
+## Review workflow
+
+Before any live mapping is written, complete a manual review using:
+
+- [DT One Product Mapping Review](./dtone-product-mapping-review.md)
+- `supabase/sql/dtone-product-mapping-template.sql`
+
+Only approve a mapping after the DT One catalog, dashboard, or API has been
+checked directly.
+
 ## Safe behavior
 
 If a product is not mapped:
