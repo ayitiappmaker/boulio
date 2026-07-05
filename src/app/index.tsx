@@ -51,9 +51,9 @@ export default function HomeScreen() {
       </View>
       <View style={styles.quickActionList}>
         <QuickActionCard
-          title="$5 Top Up"
-          subtitle="Digicel / Natcom"
-          onPress={() => router.push('/topup')}
+          title={t('requestSocialData')}
+          subtitle={t('createLinkFamilyCanPay')}
+          onPress={() => router.push({ pathname: '/topup', params: { mode: 'request' } })}
         />
       </View>
 
