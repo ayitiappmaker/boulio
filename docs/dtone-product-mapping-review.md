@@ -13,6 +13,13 @@ catalog, dashboard, or API response.
 
 ## Review notes
 
+- Service fee schedule for draft mapping assumptions:
+  - $1.00 to $4.99 product amount: $0.99 fee
+  - $5.00 to $9.99 product amount: $1.49 fee
+  - $10.00 to $19.99 product amount: $1.99 fee
+  - $20.00 to $29.99 product amount: $2.99 fee
+  - $30.00 to $49.99 product amount: $3.99 fee
+  - $50.00 and above: $4.99 fee
 - Only use real DT One ids from the DT One catalog, dashboard, or API.
 - Match Digicel and Natcom carefully.
 - Match airtime and data carefully.
