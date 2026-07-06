@@ -145,6 +145,9 @@ Safety rules:
 - `DTONE_TRANSACTIONS_PATH` controls the create-transaction path
 - for synchronous transaction creation, use `/sync/transactions`
 - do not include DT One credentials in the endpoint configuration
+- the stored phone stays `509XXXXXXXX`
+- the DT One payload sends `+509XXXXXXXX`
+- the DT One payload uses `bt_<uuid_without_hyphens>` for `external_id`
 
 Status handling:
 
@@ -180,6 +183,7 @@ Dry-run rules:
 Dry-run responses return a preview only.
 They do not call DT One, do not mark the row completed, and do not update
 `supplier_status` to successful.
+The preview should match the live manual DT One payload exactly.
 
 If `product_id` is missing, the dry run fails with `PRODUCT_ID_MISSING`.
 If a linked product cannot be found, the dry run fails safely.

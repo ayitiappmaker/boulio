@@ -61,6 +61,7 @@ type PreparedFulfillment = {
   order: TopUpOrderRow;
   product: TopUpProductRow;
   recipientPhone: string;
+  dtoneMobileNumber: string;
   externalId: string;
   payloadPreview: {
     product_id: string;
@@ -416,11 +417,12 @@ async function prepareFulfillment(
       order,
       product,
       recipientPhone,
+      dtoneMobileNumber: buildDtOneMobileNumber(recipientPhone),
       externalId: buildExternalId(order.id),
       payloadPreview: buildDtOnePayloadPreview(
         product,
-        recipientPhone,
-        order.id,
+        buildDtOneMobileNumber(recipientPhone),
+        buildExternalId(order.id),
       ),
     },
   };
@@ -779,7 +781,7 @@ async function fetchProductById(
 function buildDtOnePayloadPreview(
   product: TopUpProductRow,
   recipientPhone: string,
-  orderId: string,
+  externalId: string,
 ) {
   // Future phase: this preview should remain the single source of truth for
   // the live DT One request body.
@@ -788,12 +790,16 @@ function buildDtOnePayloadPreview(
     credit_party_identifier: {
       mobile_number: recipientPhone,
     },
-    external_id: buildExternalId(orderId),
+    external_id: externalId,
   };
 }
 
 function buildExternalId(orderId: string) {
-  return `boulio-topup-order-${orderId}`;
+  return `bt_${orderId.replace(/-/g, "")}`;
+}
+
+function buildDtOneMobileNumber(recipientPhone: string) {
+  return `+${recipientPhone}`;
 }
 
 function normalizeRecipientPhoneForDtOne(phone: string) {

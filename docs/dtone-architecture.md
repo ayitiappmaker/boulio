@@ -126,6 +126,9 @@ Dry-run behavior:
 - loads the linked `topup_products` row by exact id
 - validates carrier, product type, product name, amount, and mapping status
 - normalizes the recipient phone for DT One
+- keeps the database value as `509XXXXXXXX`
+- sends DT One `mobile_number` as `+509XXXXXXXX`
+- uses `bt_<uuid_without_hyphens>` for `external_id`
 - returns a payload preview only
 - does not call DT One
 - does not create a transaction
@@ -153,8 +156,9 @@ Manual live fulfillment:
 - uses the same validated payload data as dry run
 - posts to the configured DT One endpoint built from
   `DTONE_API_BASE_URL + DTONE_TRANSACTIONS_PATH`
+- sends `mobile_number` as `+509XXXXXXXX`
+- sends `external_id` as `bt_<uuid_without_hyphens>`
 - sends the actual DT One request only after the admin secret passes
-- uses `boulio-topup-order-<order_id>` as the idempotency/external id
 - stores only a safe supplier reference and status summary
 - does not mark the order completed unless DT One confirms success
 
