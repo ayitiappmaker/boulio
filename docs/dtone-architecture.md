@@ -95,7 +95,8 @@ Dry-run behavior:
 
 - requires an authorization header
 - loads the paid top-up order on the server
-- loads the related `topup_products` row
+- requires `topup_orders.product_id`
+- loads the linked `topup_products` row by exact id
 - validates carrier, product type, product name, amount, and mapping status
 - normalizes the recipient phone for DT One
 - returns a payload preview only
@@ -104,8 +105,9 @@ Dry-run behavior:
 - does not update supplier status
 - does not mark the order completed
 
-Only mapped and paid top-up orders pass the dry run.
-Unmapped products fail safely with `PRODUCT_NOT_MAPPED`.
+Only mapped and paid top-up orders with `product_id` pass the dry run.
+Old orders without `product_id` fail safely with `PRODUCT_ID_MISSING` until
+they are backfilled.
 Inactive products, missing external ids, or non-DT One products also fail
 before any supplier action could happen.
 

@@ -24,6 +24,7 @@ type FulfillTopupRequest = {
 
 type TopUpOrderRow = {
   id: string;
+  product_id: string | null;
   carrier: string;
   product_type: string;
   product_name: string;
@@ -78,6 +79,8 @@ type DryRunErrorCode =
   | 'UNAUTHORIZED_NO_AUTH_HEADER'
   | 'INVALID_REQUEST'
   | 'ORDER_NOT_FOUND'
+  | 'PRODUCT_ID_MISSING'
+  | 'PRODUCT_NOT_FOUND'
   | 'PRODUCT_NOT_MAPPED'
   | 'INVALID_PRODUCT_MAPPING'
   | 'FULFILLMENT_NOT_READY';
@@ -162,15 +165,29 @@ Deno.serve(async (req) => {
     );
   }
 
-  const product = await fetchProductMapping(
-    baseUrl,
-    serviceRoleKey,
-    order.carrier,
-    order.product_type,
-    order.product_name
-  );
+  if (!order.product_id) {
+    return jsonResponse(
+      409,
+      errorResponse(
+        targetId,
+        'PRODUCT_ID_MISSING',
+        'This order is missing product_id. Backfill older orders before exact fulfillment.'
+      ),
+      corsHeaders
+    );
+  }
+
+  const product = await fetchProductById(baseUrl, serviceRoleKey, order.product_id);
+  if (!product) {
+    return jsonResponse(
+      409,
+      errorResponse(targetId, 'PRODUCT_NOT_FOUND', 'Linked product could not be found for this order.'),
+      corsHeaders
+    );
+  }
 
   const productValidation = validateProductMapping(product, {
+    expectedProductId: order.product_id,
     carrier: order.carrier,
     productType: order.product_type,
     productName: order.product_name,
@@ -307,6 +324,7 @@ function validateTopUpOrderReadiness(order: TopUpOrderRow) {
 function validateProductMapping(
   product: TopUpProductRow | null,
   expected: {
+    expectedProductId: string;
     carrier: string;
     productType: string;
     productName: string;
@@ -347,6 +365,7 @@ function validateProductMapping(
   }
 
   const mappingMatches =
+    product.id === expected.expectedProductId &&
     mappedCarrier === expected.carrier &&
     mappedProductType === expected.productType &&
     mappedName === expected.productName &&
@@ -376,7 +395,7 @@ async function fetchTopUpOrderById(baseUrl: string, serviceRoleKey: string, orde
   const response = await fetch(
     `${baseUrl}/rest/v1/topup_orders?id=eq.${encodeURIComponent(
       orderId
-    )}&select=id,carrier,product_type,product_name,recipient_phone,amount_usd,service_fee_usd,total_usd,status,payment_status,supplier_status&limit=1`,
+    )}&select=id,product_id,carrier,product_type,product_name,recipient_phone,amount_usd,service_fee_usd,total_usd,status,payment_status,supplier_status&limit=1`,
     {
       headers: buildServiceHeaders(serviceRoleKey),
     }
@@ -390,18 +409,10 @@ async function fetchTopUpOrderById(baseUrl: string, serviceRoleKey: string, orde
   return rows[0] ?? null;
 }
 
-async function fetchProductMapping(
-  baseUrl: string,
-  serviceRoleKey: string,
-  carrier: string,
-  productType: string,
-  productName: string
-) {
+async function fetchProductById(baseUrl: string, serviceRoleKey: string, productId: string) {
   const response = await fetch(
-    `${baseUrl}/rest/v1/topup_products?carrier=eq.${encodeURIComponent(
-      carrier
-    )}&product_type=eq.${encodeURIComponent(productType)}&name=eq.${encodeURIComponent(
-      productName
+    `${baseUrl}/rest/v1/topup_products?id=eq.${encodeURIComponent(
+      productId
     )}&select=id,carrier,product_type,name,bundle_label,amount_usd,active,external_provider,external_product_id,external_product_metadata&limit=1`,
     {
       headers: buildServiceHeaders(serviceRoleKey),

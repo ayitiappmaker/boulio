@@ -111,6 +111,21 @@ In a future phase, the backend will:
 - move data request rows from `processing` to `completed`
 - mark failures for manual review
 
+## Exact product linkage
+
+Top-up orders now store a nullable `product_id` reference to `topup_products`.
+New orders should save the exact selected product id at creation time.
+
+Older orders without `product_id` can be backfilled safely when there is exactly
+one product match on:
+
+- carrier
+- product type
+- product name
+- amount
+
+If a row is ambiguous or unmatched, leave `product_id` null.
+
 ## Dry-run preview
 
 Before real supplier fulfillment is enabled, Boulio can run a safe server-side
@@ -122,18 +137,22 @@ Dry-run rules:
 - the request body must use `mode: "dry_run"`
 - the order must already be paid
 - the order must be in `processing` or `paid` status
-- the related `topup_products` row must exist
+- the order must have `product_id`
+- the linked `topup_products` row must exist
 - the product must be active
 - the product provider must be `dtone`
 - the product must have an external product id
+- the linked product id must match exactly
 - the carrier and product type must match exactly
-- the stored product name and amount must match the mapped product
+- the stored product name and amount must match the linked product
 - the recipient phone must be normalizable for DT One
 
 Dry-run responses return a preview only.
 They do not call DT One, do not mark the row completed, and do not update
 `supplier_status` to successful.
 
+If `product_id` is missing, the dry run fails with `PRODUCT_ID_MISSING`.
+If a linked product cannot be found, the dry run fails safely.
 If a product is unmapped or not safe to fulfill, the dry run must fail cleanly
 instead of sending anything upstream.
 

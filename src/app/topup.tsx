@@ -20,7 +20,11 @@ import { createPaymentForDataRequest, createPaymentForTopUpOrder, openCheckoutUr
 import { fetchMyProfile, isProfileRequiredError, upsertMyProfile, type ProfileRecord } from '@/lib/profile';
 import { getStoredUserMode, subscribeToUserModeChanges } from '@/lib/userMode';
 import { getRecipientReceivesLabel } from '@/lib/topupProductDisplay';
-import { detectHaitiCarrierFromPhone } from '@/lib/carrierDetection';
+import {
+  detectHaitiCarrierFromPhone,
+  isValidHaitiMobilePhone,
+  normalizeHaitiPhoneForFulfillment,
+} from '@/lib/carrierDetection';
 import type { Session } from '@supabase/supabase-js';
 import type { TopUpCarrier, TopUpProduct, UserMode } from '@/lib/types';
 
@@ -224,10 +228,11 @@ export default function TopUpScreen() {
   }, [session]);
 
   const activeSendProducts = useMemo(() => products.filter((product) => product.active), [products]);
+  const displaySendProducts = useMemo(() => dedupeAirtimeProducts(activeSendProducts), [activeSendProducts]);
   const filteredSendProducts = useMemo(() => {
     const normalizedSearch = productSearch.trim().toLowerCase();
 
-    return activeSendProducts.filter((product) => {
+    return displaySendProducts.filter((product) => {
       const filterMatches =
         productFilter === 'All' || product.productType === productFilter;
       if (!filterMatches) {
@@ -252,7 +257,7 @@ export default function TopUpScreen() {
 
       return searchSpace.includes(normalizedSearch);
     });
-  }, [activeSendProducts, productFilter, productSearch]);
+  }, [displaySendProducts, productFilter, productSearch]);
   const requestBundleProducts = useMemo(
     () => products.filter((product) => product.active && product.productType === 'data'),
     [products]
@@ -281,15 +286,21 @@ export default function TopUpScreen() {
     });
   }, [requestBundleProducts, requestProductSearch]);
 
-  const selectedSendProduct =
+  const selectedSendProductCandidate =
     products.find((product) => product.id === selectedSendProductId && product.active) ?? null;
   const selectedRequestProduct =
     requestBundleProducts.find((product) => product.id === selectedRequestProductId) ?? null;
-  const sendPhoneValid = isValidHaitiPhoneNumber(sendPhoneNumber);
+  const sendPhoneValid = isValidHaitiMobilePhone(sendPhoneNumber);
   const detectedSendCarrier = sendPhoneValid ? detectHaitiCarrierFromPhone(sendPhoneNumber) : null;
   const confirmedSendCarrier = sendCarrier ?? detectedSendCarrier;
-  const carrierMismatch =
-    Boolean(selectedSendProduct && confirmedSendCarrier && selectedSendProduct.carrier !== confirmedSendCarrier);
+  const selectedSendProduct =
+    resolveSelectedTopUpProduct(activeSendProducts, selectedSendProductCandidate, confirmedSendCarrier);
+  const carrierMismatch = Boolean(
+    selectedSendProduct && confirmedSendCarrier && selectedSendProduct.carrier !== confirmedSendCarrier
+  );
+  const requestPhoneValid = isValidHaitiMobilePhone(requestPhoneNumber);
+  const sendPhoneError = sendPhoneNumber.trim() && !sendPhoneValid ? t('invalidHaitiMobileNumber') : null;
+  const requestPhoneError = requestPhoneNumber.trim() && !requestPhoneValid ? t('invalidHaitiMobileNumber') : null;
 
   const resetSendFlow = () => {
     setSendStep(1);
@@ -384,13 +395,17 @@ export default function TopUpScreen() {
   };
 
   const changeSendCarrier = (carrier: TopUpCarrier) => {
+    if (!isValidHaitiMobilePhone(sendPhoneNumber)) {
+      return;
+    }
+
     setSendCarrier(carrier);
     setSendCarrierManual(true);
     setSendError(null);
   };
 
   useEffect(() => {
-    if (!sendPhoneNumber.trim()) {
+    if (!sendPhoneNumber.trim() || !isValidHaitiMobilePhone(sendPhoneNumber)) {
       setSendCarrier(null);
       setSendCarrierManual(false);
       return;
@@ -509,8 +524,9 @@ export default function TopUpScreen() {
       return;
     }
 
-    if (!sendPhoneValid) {
-      setSendError(t('enterHaitiPhoneNumber'));
+    const normalizedPhone = normalizeHaitiPhoneForFulfillment(sendPhoneNumber);
+    if (!normalizedPhone) {
+      setSendError(t('invalidHaitiMobileNumber'));
       return;
     }
 
@@ -541,10 +557,11 @@ export default function TopUpScreen() {
 
     try {
       const nextOrder = await createPendingTopUpOrder({
+        productId: selectedSendProduct.id,
         carrier: selectedSendProduct.carrier,
         productType: selectedSendProduct.productType,
         productName: selectedSendProduct.name,
-        recipientPhone: sendPhoneNumber.trim(),
+        recipientPhone: normalizedPhone,
         recipientName: null,
         amountUsd: selectedSendProduct.amountUsd,
         serviceFeeUsd: selectedSendProduct.serviceFeeUsd,
@@ -581,6 +598,12 @@ export default function TopUpScreen() {
       return;
     }
 
+    const normalizedPhone = normalizeHaitiPhoneForFulfillment(requestPhoneNumber);
+    if (!normalizedPhone) {
+      setRequestError(t('invalidHaitiMobileNumber'));
+      return;
+    }
+
     if (!skipProfileCheck && !hasCompleteProfile) {
       promptForProfileCompletion('request');
       return;
@@ -592,7 +615,7 @@ export default function TopUpScreen() {
 
     try {
       const nextRequest = await createDataRequest({
-        recipientPhone: requestPhoneNumber.trim(),
+        recipientPhone: normalizedPhone,
         carrier: requestCarrier,
         productName: selectedRequestProduct.name,
         bundleLabel: selectedRequestProduct.bundleLabel,
@@ -609,7 +632,7 @@ export default function TopUpScreen() {
       if (requestSaveRecipient) {
         await maybeSaveRecipient(
           requestRecipientName.trim(),
-          requestPhoneNumber.trim(),
+          normalizedPhone,
           requestCarrier,
           setRequestRecipientMessage
         );
@@ -751,20 +774,21 @@ export default function TopUpScreen() {
                 <View style={styles.inputGroup}>
                   <TextInput
                     value={sendPhoneNumber}
-                    onChangeText={(value) => {
-                      setSendPhoneNumber(value);
-                      setSendError(null);
-                      setSendPaymentNotice(null);
-                    }}
+                          onChangeText={(value) => {
+                            setSendPhoneNumber(value);
+                            setSendError(null);
+                            setSendPaymentNotice(null);
+                          }}
                     placeholder="+509 34 12 34 56"
                     placeholderTextColor={Colors.light.muted}
                     keyboardType="phone-pad"
                     textContentType="telephoneNumber"
                     style={styles.input}
-                  />
-                </View>
-                {sendPhoneNumber.trim() ? (
-                  detectedSendCarrier ? (
+                        />
+                        {sendPhoneError ? <Text style={styles.errorText}>{sendPhoneError}</Text> : null}
+                      </View>
+                      {sendPhoneNumber.trim() ? (
+                        detectedSendCarrier ? (
                     <View style={styles.carrierConfirmationRow}>
                       <View style={styles.carrierConfirmationText}>
                         <Text style={styles.inputLabel}>{`${t('carrierDetected')}: ${detectedSendCarrier}`}</Text>
@@ -801,13 +825,13 @@ export default function TopUpScreen() {
                     onPress={() => setSendStep(1)}
                     style={styles.actionButtonFlex}
                   />
-                  <PrimaryButton
-                    label={t('continueWithArrow')}
-                    onPress={() => setSendStep(3)}
-                    disabled={!sendPhoneValid || !selectedSendProduct || !confirmedSendCarrier || carrierMismatch}
-                    style={styles.actionButtonFlex}
-                  />
-                </View>
+                        <PrimaryButton
+                          label={t('continueWithArrow')}
+                          onPress={() => setSendStep(3)}
+                          disabled={!sendPhoneValid || !selectedSendProduct || !confirmedSendCarrier || carrierMismatch}
+                          style={styles.actionButtonFlex}
+                        />
+                      </View>
               </View>
             </SectionCard>
           ) : null}
@@ -936,6 +960,7 @@ export default function TopUpScreen() {
                           textContentType="telephoneNumber"
                           style={styles.input}
                         />
+                        {requestPhoneError ? <Text style={styles.errorText}>{requestPhoneError}</Text> : null}
                       </View>
                       {requestRecipientMessage ? <Text style={styles.noteText}>{requestRecipientMessage}</Text> : null}
                       <View style={styles.actionRow}>
@@ -947,7 +972,7 @@ export default function TopUpScreen() {
                         <PrimaryButton
                           label={t('continueWithArrow')}
                           onPress={() => setRequestStep(4)}
-                          disabled={!requestPhoneNumber.trim()}
+                          disabled={!requestPhoneValid}
                           style={styles.actionButtonFlex}
                         />
                       </View>
@@ -981,7 +1006,7 @@ export default function TopUpScreen() {
                             <PrimaryButton
                               label={t('createRequestLink')}
                               onPress={createRequest}
-                              disabled={requestBusy || !selectedRequestProduct}
+                              disabled={requestBusy || !selectedRequestProduct || !requestPhoneValid}
                               style={styles.actionButtonFlex}
                             />
                           </View>
@@ -1145,6 +1170,47 @@ function renderProductTypeLabel(value: SendProductType) {
   return value === 'airtime' ? t('airtime') : t('socialData');
 }
 
+function dedupeAirtimeProducts(products: TopUpProduct[]) {
+  const seenAirtimeAmounts = new Set<number>();
+  const nextProducts: TopUpProduct[] = [];
+
+  for (const product of products) {
+    if (product.productType !== 'airtime') {
+      nextProducts.push(product);
+      continue;
+    }
+
+    if (seenAirtimeAmounts.has(product.amountUsd)) {
+      continue;
+    }
+
+    seenAirtimeAmounts.add(product.amountUsd);
+    nextProducts.push(product);
+  }
+
+  return nextProducts;
+}
+
+function resolveSelectedTopUpProduct(
+  products: TopUpProduct[],
+  selectedProduct: TopUpProduct | null,
+  confirmedCarrier: TopUpCarrier | null
+) {
+  if (!selectedProduct || selectedProduct.productType !== 'airtime' || !confirmedCarrier) {
+    return selectedProduct;
+  }
+
+  return (
+    products.find(
+      (product) =>
+        product.active &&
+        product.productType === 'airtime' &&
+        product.carrier === confirmedCarrier &&
+        product.amountUsd === selectedProduct.amountUsd
+    ) ?? selectedProduct
+  );
+}
+
 function modeSubtitle(mode: UserMode) {
   return mode === 'diaspora_supporter'
     ? 'Diaspora Supporter mode keeps the focus on family support.'
@@ -1153,11 +1219,6 @@ function modeSubtitle(mode: UserMode) {
 
 function formatCurrency(value: number) {
   return Number.isInteger(value) ? `$${value}` : `$${value.toFixed(2)}`;
-}
-
-function isValidHaitiPhoneNumber(phone: string) {
-  const digits = phone.replace(/\D/g, '');
-  return (digits.length === 8 && digits.length > 0) || (digits.length === 11 && digits.startsWith('509'));
 }
 
 const styles = StyleSheet.create({
