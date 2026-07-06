@@ -86,10 +86,15 @@ It does not:
 - mark orders completed
 - expose supplier credentials to the client
 
-## Dry-run mode
+## Fulfillment modes
 
-The `fulfill-topup` Edge Function now supports a safe `dry_run` mode for
-top-up orders only.
+The `fulfill-topup` Edge Function supports two locked-down server-only modes
+for top-up orders:
+
+- `dry_run`
+- `live_manual`
+
+### Dry run
 
 Dry-run behavior:
 
@@ -110,6 +115,35 @@ Old orders without `product_id` fail safely with `PRODUCT_ID_MISSING` until
 they are backfilled.
 Inactive products, missing external ids, or non-DT One products also fail
 before any supplier action could happen.
+
+### Manual live fulfillment
+
+`live_manual` is locked down behind an extra secret:
+
+- `x-fulfillment-admin-secret`
+- `FULFILLMENT_ADMIN_SECRET`
+
+Manual live fulfillment:
+
+- is server-side only
+- is not triggered from Stripe
+- is not exposed as a user-facing button
+- uses the same validated payload data as dry run
+- posts to `DTONE_API_BASE_URL/transactions` with basic auth from
+  `DTONE_API_USERNAME` and `DTONE_API_PASSWORD`
+- sends the actual DT One request only after the admin secret passes
+- uses `boulio-topup-order-<order_id>` as the idempotency/external id
+- stores only a safe supplier reference and status summary
+- does not mark the order completed unless DT One confirms success
+
+Response handling:
+
+- confirmed DT One success moves `supplier_status` to `successful` and `status` to `completed`
+- pending or processing DT One responses keep the order in `processing` and set `supplier_status` to `pending`
+- DT One failures set `supplier_status` to `failed` and do not trigger refunds
+
+The current schema does not include `fulfilled_at`, so no timestamp update is
+performed yet.
 
 ## Language to avoid
 

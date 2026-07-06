@@ -126,6 +126,30 @@ one product match on:
 
 If a row is ambiguous or unmatched, leave `product_id` null.
 
+## Manual live fulfillment
+
+The `fulfill-topup` Edge Function has a locked-down `live_manual` mode for
+trusted operators only.
+
+Safety rules:
+
+- the request must include `x-fulfillment-admin-secret`
+- the header value must match `FULFILLMENT_ADMIN_SECRET`
+- the row must be paid and in `processing` or `paid`
+- the order must not already be completed or successfully fulfilled
+- the order must have `product_id`
+- the linked product must exist, be active, and be mapped to DT One
+- the request must use the validated exact product payload
+
+Status handling:
+
+- success -> `supplier_status = successful`, `status = completed`
+- pending or processing -> `supplier_status = pending`, `status = processing`
+- failure -> `supplier_status = failed`, `status = failed`
+
+The function returns only a safe summary of the DT One response.
+No automatic fulfillment is triggered from Stripe or anywhere else.
+
 ## Dry-run preview
 
 Before real supplier fulfillment is enabled, Boulio can run a safe server-side
