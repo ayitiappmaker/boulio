@@ -111,6 +111,32 @@ In a future phase, the backend will:
 - move data request rows from `processing` to `completed`
 - mark failures for manual review
 
+## Dry-run preview
+
+Before real supplier fulfillment is enabled, Boulio can run a safe server-side
+dry run for top-up orders.
+
+Dry-run rules:
+
+- the request must come through the `fulfill-topup` Edge Function
+- the request body must use `mode: "dry_run"`
+- the order must already be paid
+- the order must be in `processing` or `paid` status
+- the related `topup_products` row must exist
+- the product must be active
+- the product provider must be `dtone`
+- the product must have an external product id
+- the carrier and product type must match exactly
+- the stored product name and amount must match the mapped product
+- the recipient phone must be normalizable for DT One
+
+Dry-run responses return a preview only.
+They do not call DT One, do not mark the row completed, and do not update
+`supplier_status` to successful.
+
+If a product is unmapped or not safe to fulfill, the dry run must fail cleanly
+instead of sending anything upstream.
+
 ## Server-side only
 
 Fulfillment must stay server-side because:
@@ -160,3 +186,6 @@ It does not:
 - send mobile data
 - mark completion automatically
 - build an admin dashboard
+
+Real fulfillment is still disabled until the live DT One send path is added in
+a later phase.

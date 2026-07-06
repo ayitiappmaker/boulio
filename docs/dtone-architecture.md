@@ -86,6 +86,29 @@ It does not:
 - mark orders completed
 - expose supplier credentials to the client
 
+## Dry-run mode
+
+The `fulfill-topup` Edge Function now supports a safe `dry_run` mode for
+top-up orders only.
+
+Dry-run behavior:
+
+- requires an authorization header
+- loads the paid top-up order on the server
+- loads the related `topup_products` row
+- validates carrier, product type, product name, amount, and mapping status
+- normalizes the recipient phone for DT One
+- returns a payload preview only
+- does not call DT One
+- does not create a transaction
+- does not update supplier status
+- does not mark the order completed
+
+Only mapped and paid top-up orders pass the dry run.
+Unmapped products fail safely with `PRODUCT_NOT_MAPPED`.
+Inactive products, missing external ids, or non-DT One products also fail
+before any supplier action could happen.
+
 ## Language to avoid
 
 Avoid remittance-style wording such as:

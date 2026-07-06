@@ -1,26 +1,29 @@
 // Supabase Edge Function: fulfill-topup
 //
-// DT One fulfillment prep only.
+// Dry-run fulfillment prep only.
 // Required environment variables:
 // - SUPABASE_URL
 // - SUPABASE_SERVICE_ROLE_KEY
-// - DTONE_BASE_URL
-// - DTONE_API_KEY or DTONE_CLIENT_ID / DTONE_CLIENT_SECRET
 //
-// This function only validates readiness and returns a placeholder-safe
-// response. It does not call DT One, does not send airtime/data, and does not
-// update fulfillment success.
+// This function validates a paid top-up order, loads the mapped DT One
+// product, normalizes the recipient phone, and returns a safe preview of the
+// payload that would be sent later.
+//
+// It does not call DT One, does not create a transaction, does not update
+// supplier_status, and does not mark the order completed.
 
 type FulfillmentTargetType = 'topup_order' | 'data_request';
+
+type FulfillmentMode = 'dry_run';
 
 type FulfillTopupRequest = {
   target_type?: FulfillmentTargetType;
   target_id?: string;
+  mode?: FulfillmentMode;
 };
 
 type TopUpOrderRow = {
   id: string;
-  user_id: string;
   carrier: string;
   product_type: string;
   product_name: string;
@@ -31,22 +34,6 @@ type TopUpOrderRow = {
   status: string;
   payment_status: string;
   supplier_status: string;
-};
-
-type DataRequestRow = {
-  id: string;
-  request_code: string;
-  carrier: string;
-  product_type: string;
-  product_name: string;
-  bundle_label: string | null;
-  amount_usd: number | string;
-  service_fee_usd: number | string;
-  total_usd: number | string;
-  public_status: string;
-  internal_status: string;
-  payment_status: string;
-  fulfillment_status: string;
 };
 
 type TopUpProductRow = {
@@ -62,21 +49,47 @@ type TopUpProductRow = {
   external_product_metadata: Record<string, unknown> | null;
 };
 
-type FulfillmentPlaceholderResponse = {
-  ok: false;
-  code:
-    | 'UNAUTHORIZED_NO_AUTH_HEADER'
-    | 'INVALID_REQUEST'
-    | 'ORDER_NOT_FOUND'
-    | 'REQUEST_NOT_FOUND'
-    | 'FULFILLMENT_NOT_READY'
-    | 'PRODUCT_NOT_MAPPED'
-    | 'INVALID_PRODUCT_MAPPING'
-    | 'FULFILLMENT_NOT_ENABLED';
-  message: string;
-  target_type: FulfillmentTargetType;
+type DryRunSuccessResponse = {
+  ok: true;
+  dry_run: true;
+  ready_for_fulfillment: true;
+  target_type: 'topup_order';
   target_id: string;
-  ready_for_fulfillment: boolean;
+  order: {
+    id: string;
+    carrier: string;
+    recipient_phone: string;
+    product_name: string;
+    amount_usd: string;
+    service_fee_usd: string;
+    total_usd: string;
+  };
+  dtone_payload_preview: {
+    product_id: string;
+    credit_party_identifier: {
+      mobile_number: string;
+    };
+    external_id: string;
+  };
+  message: string;
+};
+
+type DryRunErrorCode =
+  | 'UNAUTHORIZED_NO_AUTH_HEADER'
+  | 'INVALID_REQUEST'
+  | 'ORDER_NOT_FOUND'
+  | 'PRODUCT_NOT_MAPPED'
+  | 'INVALID_PRODUCT_MAPPING'
+  | 'FULFILLMENT_NOT_READY';
+
+type DryRunErrorResponse = {
+  ok: false;
+  dry_run: true;
+  ready_for_fulfillment: false;
+  code: DryRunErrorCode;
+  message: string;
+  target_type: 'topup_order';
+  target_id: string;
 };
 
 const corsHeaders = {
@@ -95,7 +108,7 @@ Deno.serve(async (req) => {
   }
 
   if (req.method !== 'POST') {
-    return jsonResponse(405, wrapFailure('topup_order', 'unknown', 'INVALID_REQUEST', 'Method not allowed.'), corsHeaders);
+    return jsonResponse(405, errorResponse('unknown', 'INVALID_REQUEST', 'Method not allowed.'), corsHeaders);
   }
 
   const baseUrl = Deno.env.get('SUPABASE_URL')?.trim().replace(/\/$/, '');
@@ -104,7 +117,7 @@ Deno.serve(async (req) => {
   if (!baseUrl || !serviceRoleKey) {
     return jsonResponse(
       500,
-      wrapFailure('topup_order', 'unknown', 'FULFILLMENT_NOT_READY', 'Fulfillment is not configured yet.'),
+      errorResponse('unknown', 'FULFILLMENT_NOT_READY', 'Fulfillment is not configured yet.'),
       corsHeaders
     );
   }
@@ -113,7 +126,7 @@ Deno.serve(async (req) => {
   if (!authorization?.trim()) {
     return jsonResponse(
       401,
-      wrapFailure('topup_order', 'unknown', 'UNAUTHORIZED_NO_AUTH_HEADER', 'Missing authorization header'),
+      errorResponse('unknown', 'UNAUTHORIZED_NO_AUTH_HEADER', 'Missing authorization header'),
       corsHeaders
     );
   }
@@ -121,77 +134,137 @@ Deno.serve(async (req) => {
   const body = (await req.json().catch(() => null)) as FulfillTopupRequest | null;
   const targetType = body?.target_type;
   const targetId = body?.target_id?.trim();
+  const mode = body?.mode;
 
-  if (!targetType || !targetId) {
+  if (targetType !== 'topup_order' || mode !== 'dry_run' || !targetId) {
     return jsonResponse(
       400,
-      wrapFailure(targetType ?? 'topup_order', targetId ?? 'unknown', 'INVALID_REQUEST', 'target_type and target_id are required.'),
+      errorResponse(
+        targetId ?? 'unknown',
+        'INVALID_REQUEST',
+        'target_type must be topup_order, mode must be dry_run, and target_id is required.'
+      ),
       corsHeaders
     );
   }
 
-  if (targetType === 'topup_order') {
-    const order = await fetchTopUpOrderById(baseUrl, serviceRoleKey, targetId);
-    if (!order) {
-      return jsonResponse(404, wrapFailure(targetType, targetId, 'ORDER_NOT_FOUND', 'Top-up order not found.'), corsHeaders);
-    }
+  const order = await fetchTopUpOrderById(baseUrl, serviceRoleKey, targetId);
+  if (!order) {
+    return jsonResponse(404, errorResponse(targetId, 'ORDER_NOT_FOUND', 'Top-up order not found.'), corsHeaders);
+  }
 
-    const readiness = evaluateTopUpOrderReadiness(baseUrl, serviceRoleKey, order);
-    logReadiness(targetType, targetId, readiness.readyForFulfillment, readiness.code);
-
-    if (!readiness.readyForFulfillment) {
-      return jsonResponse(readiness.httpStatus, wrapFailure(targetType, targetId, readiness.code, readiness.message), corsHeaders);
-    }
-
+  const orderReadiness = validateTopUpOrderReadiness(order);
+  if (!orderReadiness.readyForFulfillment) {
     return jsonResponse(
-      200,
-      wrapFailure(targetType, targetId, 'FULFILLMENT_NOT_ENABLED', 'Supplier fulfillment is not enabled yet.', true),
+      orderReadiness.httpStatus,
+      errorResponse(targetId, orderReadiness.code, orderReadiness.message),
       corsHeaders
     );
   }
 
-  const requestRow = await fetchDataRequestByIdOrCode(baseUrl, serviceRoleKey, targetId);
-  if (!requestRow) {
-    return jsonResponse(404, wrapFailure(targetType, targetId, 'REQUEST_NOT_FOUND', 'Data request not found.'), corsHeaders);
-  }
-
-  const readiness = await evaluateDataRequestReadiness(baseUrl, serviceRoleKey, requestRow);
-  logReadiness(targetType, targetId, readiness.readyForFulfillment, readiness.code);
-
-  if (!readiness.readyForFulfillment) {
-    return jsonResponse(readiness.httpStatus, wrapFailure(targetType, targetId, readiness.code, readiness.message), corsHeaders);
-  }
-
-  return jsonResponse(
-    200,
-    wrapFailure(targetType, targetId, 'FULFILLMENT_NOT_ENABLED', 'Supplier fulfillment is not enabled yet.', true),
-    corsHeaders
+  const product = await fetchProductMapping(
+    baseUrl,
+    serviceRoleKey,
+    order.carrier,
+    order.product_type,
+    order.product_name
   );
+
+  const productValidation = validateProductMapping(product, {
+    carrier: order.carrier,
+    productType: order.product_type,
+    productName: order.product_name,
+    amountUsd: Number(order.amount_usd),
+  });
+
+  if (!productValidation.readyForFulfillment) {
+    return jsonResponse(
+      productValidation.httpStatus,
+      errorResponse(targetId, productValidation.code, productValidation.message),
+      corsHeaders
+    );
+  }
+
+  const recipientPhone = normalizeRecipientPhoneForDtOne(order.recipient_phone);
+  if (!recipientPhone) {
+    return jsonResponse(
+      409,
+      errorResponse(
+        targetId,
+        'FULFILLMENT_NOT_READY',
+        'Recipient phone cannot be normalized for DT One.'
+      ),
+      corsHeaders
+    );
+  }
+
+  const payloadPreview = buildDtOnePayloadPreview(order, productValidation.product, recipientPhone);
+
+  // Future phase: send payloadPreview to DT One here using external_id as the
+  // idempotency/reference key. Supplier status should only change after a
+  // confirmed DT One response, never before.
+
+  const response: DryRunSuccessResponse = {
+    ok: true,
+    dry_run: true,
+    ready_for_fulfillment: true,
+    target_type: 'topup_order',
+    target_id: targetId,
+    order: {
+      id: order.id,
+      carrier: order.carrier,
+      recipient_phone: recipientPhone,
+      product_name: order.product_name,
+      amount_usd: toMoneyString(order.amount_usd),
+      service_fee_usd: toMoneyString(order.service_fee_usd),
+      total_usd: toMoneyString(order.total_usd),
+    },
+    dtone_payload_preview: payloadPreview,
+    message: 'Dry run passed. No DT One transaction was sent.',
+  };
+
+  console.info('[fulfill-topup] dry run ready', {
+    target_type: response.target_type,
+    target_id: response.target_id,
+    order_id: order.id,
+    product_id: product.id,
+    external_id: payloadPreview.external_id,
+  });
+
+  return jsonResponse(200, response, corsHeaders);
 });
 
-function wrapFailure(
-  targetType: FulfillmentTargetType,
+function errorResponse(
   targetId: string,
-  code: FulfillmentPlaceholderResponse['code'],
-  message: string,
-  readyForFulfillment = false
-): FulfillmentPlaceholderResponse {
+  code: DryRunErrorCode,
+  message: string
+): DryRunErrorResponse {
   return {
     ok: false,
+    dry_run: true,
+    ready_for_fulfillment: false,
     code,
     message,
-    target_type: targetType,
+    target_type: 'topup_order',
     target_id: targetId,
-    ready_for_fulfillment: readyForFulfillment,
   };
 }
 
-async function evaluateTopUpOrderReadiness(baseUrl: string, serviceRoleKey: string, order: TopUpOrderRow) {
-  if (order.payment_status !== 'paid' || order.status !== 'processing') {
+function validateTopUpOrderReadiness(order: TopUpOrderRow) {
+  if (order.payment_status !== 'paid') {
     return {
       httpStatus: 409,
       code: 'FULFILLMENT_NOT_READY' as const,
-      message: 'Paid processing order required before fulfillment.',
+      message: 'Paid top-up order required before dry run.',
+      readyForFulfillment: false,
+    };
+  }
+
+  if (order.status !== 'processing' && order.status !== 'paid') {
+    return {
+      httpStatus: 409,
+      code: 'FULFILLMENT_NOT_READY' as const,
+      message: 'Top-up order must be in paid or processing status before dry run.',
       readyForFulfillment: false,
     };
   }
@@ -214,87 +287,19 @@ async function evaluateTopUpOrderReadiness(baseUrl: string, serviceRoleKey: stri
     };
   }
 
-  const product = await fetchProductMapping(baseUrl, serviceRoleKey, order.carrier, order.product_type, order.product_name);
-  const mappingValidation = validateProductMapping(product, {
-    carrier: order.carrier,
-    productType: order.product_type,
-    productName: order.product_name,
-    bundleLabel: null,
-    amountUsd: Number(order.amount_usd),
-  });
-
-  if (!mappingValidation.readyForFulfillment) {
-    return mappingValidation;
+  if (!normalizeText(order.recipient_phone)) {
+    return {
+      httpStatus: 409,
+      code: 'FULFILLMENT_NOT_READY' as const,
+      message: 'Recipient phone is required before fulfillment.',
+      readyForFulfillment: false,
+    };
   }
 
   return {
     httpStatus: 200,
-    code: 'FULFILLMENT_NOT_ENABLED' as const,
-    message: 'Supplier fulfillment is not enabled yet.',
-    readyForFulfillment: true,
-  };
-}
-
-async function evaluateDataRequestReadiness(baseUrl: string, serviceRoleKey: string, requestRow: DataRequestRow) {
-  if (requestRow.payment_status !== 'paid') {
-    return {
-      httpStatus: 409,
-      code: 'FULFILLMENT_NOT_READY' as const,
-      message: 'Paid request required before fulfillment.',
-      readyForFulfillment: false,
-    };
-  }
-
-  if (requestRow.internal_status !== 'processing' && requestRow.internal_status !== 'paid') {
-    return {
-      httpStatus: 409,
-      code: 'FULFILLMENT_NOT_READY' as const,
-      message: 'Processing request required before fulfillment.',
-      readyForFulfillment: false,
-    };
-  }
-
-  if (requestRow.fulfillment_status === 'successful') {
-    return {
-      httpStatus: 409,
-      code: 'FULFILLMENT_NOT_READY' as const,
-      message: 'Request is already fulfilled.',
-      readyForFulfillment: false,
-    };
-  }
-
-  if (requestRow.fulfillment_status === 'failed') {
-    return {
-      httpStatus: 409,
-      code: 'FULFILLMENT_NOT_READY' as const,
-      message: 'Request requires review before fulfillment.',
-      readyForFulfillment: false,
-    };
-  }
-
-  const product = await fetchProductMapping(
-    baseUrl,
-    serviceRoleKey,
-    requestRow.carrier,
-    requestRow.product_type,
-    requestRow.product_name
-  );
-  const mappingValidation = validateProductMapping(product, {
-    carrier: requestRow.carrier,
-    productType: requestRow.product_type,
-    productName: requestRow.product_name,
-    bundleLabel: requestRow.bundle_label,
-    amountUsd: Number(requestRow.amount_usd),
-  });
-
-  if (!mappingValidation.readyForFulfillment) {
-    return mappingValidation;
-  }
-
-  return {
-    httpStatus: 200,
-    code: 'FULFILLMENT_NOT_ENABLED' as const,
-    message: 'Supplier fulfillment is not enabled yet.',
+    code: 'FULFILLMENT_NOT_READY' as const,
+    message: 'Top-up order is ready for dry run.',
     readyForFulfillment: true,
   };
 }
@@ -305,14 +310,19 @@ function validateProductMapping(
     carrier: string;
     productType: string;
     productName: string;
-    bundleLabel: string | null;
     amountUsd: number;
   }
-) {
+): { httpStatus: number; code: DryRunErrorCode; message: string; readyForFulfillment: false } | {
+  httpStatus: number;
+  code: 'FULFILLMENT_NOT_READY';
+  message: string;
+  readyForFulfillment: true;
+  product: TopUpProductRow;
+} {
   if (!product) {
     return {
       httpStatus: 409,
-      code: 'PRODUCT_NOT_MAPPED' as const,
+      code: 'PRODUCT_NOT_MAPPED',
       message: 'Product not mapped.',
       readyForFulfillment: false,
     };
@@ -320,34 +330,34 @@ function validateProductMapping(
 
   const provider = normalizeText(product.external_provider);
   const externalProductId = normalizeText(product.external_product_id);
-  const externalProductMetadata = normalizeRecord(product.external_product_metadata);
-  const active = product.active === true;
   const mappedCarrier = normalizeText(product.carrier);
   const mappedProductType = normalizeText(product.product_type);
   const mappedName = normalizeText(product.name);
-  const mappedBundleLabel = normalizeText(product.bundle_label);
   const mappedAmount = Number(product.amount_usd);
-  const mappingLooksValid =
-    active &&
-    provider === 'dtone' &&
-    Boolean(externalProductId) &&
-    mappedCarrier &&
-    mappedProductType &&
-    (mappedProductType === 'airtime' || mappedProductType === 'data') &&
-    mappedName &&
+  const isActive = product.active === true;
+  const mappingExists = isActive && provider === 'dtone' && Boolean(externalProductId);
+
+  if (!mappingExists) {
+    return {
+      httpStatus: 409,
+      code: 'PRODUCT_NOT_MAPPED',
+      message: 'Product not mapped.',
+      readyForFulfillment: false,
+    };
+  }
+
+  const mappingMatches =
     mappedCarrier === expected.carrier &&
     mappedProductType === expected.productType &&
     mappedName === expected.productName &&
     Number.isFinite(mappedAmount) &&
     mappedAmount === expected.amountUsd &&
-    (expected.productType !== 'data' || normalizeText(expected.bundleLabel) === mappedBundleLabel) &&
-    (expected.productType !== 'airtime' || mappedBundleLabel === null) &&
-    externalProductMetadata !== undefined;
+    (expected.productType !== 'data' || normalizeText(product.bundle_label) !== null);
 
-  if (!mappingLooksValid) {
+  if (!mappingMatches) {
     return {
       httpStatus: 409,
-      code: 'INVALID_PRODUCT_MAPPING' as const,
+      code: 'INVALID_PRODUCT_MAPPING',
       message: 'Product mapping is invalid.',
       readyForFulfillment: false,
     };
@@ -355,15 +365,18 @@ function validateProductMapping(
 
   return {
     httpStatus: 200,
-    code: 'FULFILLMENT_NOT_ENABLED' as const,
-    message: 'Supplier fulfillment is not enabled yet.',
+    code: 'FULFILLMENT_NOT_READY',
+    message: 'Product mapping is valid.',
     readyForFulfillment: true,
+    product,
   };
 }
 
 async function fetchTopUpOrderById(baseUrl: string, serviceRoleKey: string, orderId: string) {
   const response = await fetch(
-    `${baseUrl}/rest/v1/topup_orders?id=eq.${encodeURIComponent(orderId)}&select=id,user_id,carrier,product_type,product_name,recipient_phone,amount_usd,service_fee_usd,total_usd,status,payment_status,supplier_status&limit=1`,
+    `${baseUrl}/rest/v1/topup_orders?id=eq.${encodeURIComponent(
+      orderId
+    )}&select=id,carrier,product_type,product_name,recipient_phone,amount_usd,service_fee_usd,total_usd,status,payment_status,supplier_status&limit=1`,
     {
       headers: buildServiceHeaders(serviceRoleKey),
     }
@@ -377,31 +390,6 @@ async function fetchTopUpOrderById(baseUrl: string, serviceRoleKey: string, orde
   return rows[0] ?? null;
 }
 
-async function fetchDataRequestByIdOrCode(baseUrl: string, serviceRoleKey: string, targetId: string) {
-  const byId = await fetchDataRequest(baseUrl, serviceRoleKey, `id=eq.${encodeURIComponent(targetId)}`);
-  if (byId) {
-    return byId;
-  }
-
-  return fetchDataRequest(baseUrl, serviceRoleKey, `request_code=eq.${encodeURIComponent(targetId)}`);
-}
-
-async function fetchDataRequest(baseUrl: string, serviceRoleKey: string, filter: string) {
-  const response = await fetch(
-    `${baseUrl}/rest/v1/data_requests?${filter}&select=id,request_code,carrier,product_type,product_name,bundle_label,amount_usd,service_fee_usd,total_usd,public_status,internal_status,payment_status,fulfillment_status&limit=1`,
-    {
-      headers: buildServiceHeaders(serviceRoleKey),
-    }
-  );
-
-  if (!response.ok) {
-    return null;
-  }
-
-  const rows = (await response.json().catch(() => [])) as DataRequestRow[];
-  return rows[0] ?? null;
-}
-
 async function fetchProductMapping(
   baseUrl: string,
   serviceRoleKey: string,
@@ -410,7 +398,11 @@ async function fetchProductMapping(
   productName: string
 ) {
   const response = await fetch(
-    `${baseUrl}/rest/v1/topup_products?carrier=eq.${encodeURIComponent(carrier)}&product_type=eq.${encodeURIComponent(productType)}&name=eq.${encodeURIComponent(productName)}&select=id,carrier,product_type,name,bundle_label,amount_usd,active,external_provider,external_product_id,external_product_metadata&limit=1`,
+    `${baseUrl}/rest/v1/topup_products?carrier=eq.${encodeURIComponent(
+      carrier
+    )}&product_type=eq.${encodeURIComponent(productType)}&name=eq.${encodeURIComponent(
+      productName
+    )}&select=id,carrier,product_type,name,bundle_label,amount_usd,active,external_provider,external_product_id,external_product_metadata&limit=1`,
     {
       headers: buildServiceHeaders(serviceRoleKey),
     }
@@ -424,31 +416,46 @@ async function fetchProductMapping(
   return rows[0] ?? null;
 }
 
+function buildDtOnePayloadPreview(order: TopUpOrderRow, product: TopUpProductRow, mobileNumber: string) {
+  // Future phase: this preview should become the real DT One request body.
+  return {
+    product_id: normalizeText(product.external_product_id) ?? '',
+    credit_party_identifier: {
+      mobile_number: mobileNumber,
+    },
+    external_id: buildExternalId(order.id),
+  };
+}
+
+function buildExternalId(orderId: string) {
+  return `boulio-topup-order-${orderId}`;
+}
+
+function normalizeRecipientPhoneForDtOne(phone: string) {
+  const digits = phone.replace(/\D/g, '');
+
+  if (!digits) {
+    return null;
+  }
+
+  if (digits.length === 11 && digits.startsWith('509')) {
+    return digits;
+  }
+
+  if (digits.length === 8) {
+    return `509${digits}`;
+  }
+
+  return null;
+}
+
 function normalizeText(value: string | null | undefined) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
 }
 
-function normalizeRecord(value: Record<string, unknown> | null | undefined) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return null;
-  }
-
-  return value;
-}
-
-function logReadiness(
-  targetType: FulfillmentTargetType,
-  targetId: string,
-  readyForFulfillment: boolean,
-  code: string
-) {
-  console.info('[fulfill-topup]', {
-    target_type: targetType,
-    target_id: targetId,
-    ready_for_fulfillment: readyForFulfillment,
-    code,
-  });
+function toMoneyString(value: number | string) {
+  return Number(value).toFixed(2);
 }
 
 function buildServiceHeaders(serviceRoleKey: string) {
