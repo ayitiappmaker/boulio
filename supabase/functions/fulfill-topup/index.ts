@@ -422,6 +422,17 @@ async function prepareFulfillment(
     return { error: orderReadiness };
   }
 
+  if (normalizeText(order.supplier_reference)) {
+    return {
+      error: {
+        httpStatus: 409,
+        code: "FULFILLMENT_NOT_READY",
+        message:
+          "This order already has a supplier reference. Live manual fulfillment can only happen once.",
+      },
+    };
+  }
+
   if (!order.product_id) {
     return {
       error: {

@@ -128,6 +128,12 @@ for top-up orders:
 - `live_manual`
 - `check_status`
 
+The browser never talks to DT One directly.
+If the admin screen needs to trigger a live action, it goes through the
+`admin-fulfillment-action` Edge Function, which checks the admin allowlist and
+adds `x-fulfillment-admin-secret` server-side before forwarding to
+`fulfill-topup`.
+
 ### Dry run
 
 Dry-run behavior:
@@ -175,6 +181,7 @@ Manual live fulfillment:
 - sends the actual DT One request only after the admin secret passes
 - stores only a safe supplier reference and status summary
 - does not mark the order completed unless DT One confirms success
+- refuses to run a second time for the same order once `supplier_reference` exists
 
 Response handling:
 
@@ -217,6 +224,18 @@ The lookup query uses:
 - `?external_id=<supplier_reference>`
 
 The response returns a safe status summary only. No credentials are exposed.
+
+## Admin operator screen
+
+The admin fulfillment screen is manual-only and internal:
+
+- route: `/admin/fulfillment`
+- access is guarded by admin email allowlist on the server
+- the screen lists recent orders and sends actions to the admin wrapper
+- the browser never receives DT One credentials or `FULFILLMENT_ADMIN_SECRET`
+- the screen can run `dry_run`, `live_manual`, and `check_status`
+- `live_manual` creates a DT One transaction once
+- `check_status` only reconciles an existing transaction
 
 ## Language to avoid
 

@@ -111,6 +111,34 @@ In a future phase, the backend will:
 - move data request rows from `processing` to `completed`
 - mark failures for manual review
 
+## Current admin workflow
+
+Boulio now includes a manual-only internal admin screen for top-up fulfillment.
+The screen lives behind a hidden route and is not linked from the normal user UI.
+
+Current path:
+
+- `/admin/fulfillment`
+
+The screen does not call DT One directly.
+It calls the Supabase Edge Function `admin-fulfillment-action`, which verifies the signed-in user is on the admin allowlist and then forwards safe requests to `fulfill-topup` with the fulfillment secret attached server-side.
+
+This keeps the browser away from:
+
+- `FULFILLMENT_ADMIN_SECRET`
+- DT One credentials
+- direct supplier calls
+
+The admin screen is manual-only:
+
+- it can list recent top-up orders
+- it can run `dry_run`
+- it can run `live_manual`
+- it can run `check_status`
+
+It does not automate Stripe webhook fulfillment.
+Stripe webhook handling remains unchanged.
+
 ## Exact product linkage
 
 Top-up orders now store a nullable `product_id` reference to `topup_products`.
@@ -151,6 +179,7 @@ Safety rules:
 - the DT One payload sends `+509XXXXXXXX`
 - the DT One payload uses `bt_<uuid_without_hyphens>` for `external_id`
 - `live_manual` sends `auto_confirm: true`
+- `live_manual` is rejected if `supplier_reference` already exists, so the same order cannot create two DT One transactions
 
 Status handling:
 
@@ -274,7 +303,8 @@ It does not:
 - send airtime
 - send mobile data
 - mark completion automatically
-- build an admin dashboard
+
+The admin dashboard is now available as a manual operator tool, but it still does not automate fulfillment or move payment logic into the webhook.
 
 Real fulfillment is still disabled until the live DT One send path is added in
 a later phase.

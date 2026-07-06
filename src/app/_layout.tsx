@@ -13,7 +13,7 @@ export default function RootLayout() {
   const router = useRouter();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
-  const hideTabs = pathname === '/login';
+  const hideTabs = pathname === '/login' || pathname.startsWith('/admin/');
   const [session, setSession] = useState<Session | null>(null);
   const languageCode = useLanguage();
   const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
@@ -120,6 +120,7 @@ export default function RootLayout() {
               tabBarIcon: ({ color }) => <Text style={[styles.tabIcon, { color }]}>＋</Text>,
             }}
           />
+          <Tabs.Screen name="admin/fulfillment" options={{ href: null }} />
           <Tabs.Screen name="notifications" options={{ href: null }} />
           <Tabs.Screen name="account" options={{ href: null }} />
           <Tabs.Screen name="login" options={{ href: null }} />

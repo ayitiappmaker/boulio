@@ -46,6 +46,7 @@ const englishTranslations = {
   chooseInternetBundle: 'Choose internet bundle',
   chooseAmount: 'Choose amount',
   enterHaitiPhoneNumber: 'Enter Haiti phone number',
+  invalidHaitiMobileNumber: 'Enter a valid Haiti mobile number.',
   chooseDataPackage: 'Choose internet bundle',
   searchProducts: 'Search products',
   searchPlans: 'Search products',

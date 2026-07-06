@@ -33,7 +33,7 @@ const styles = StyleSheet.create({
     width: '100%',
     paddingVertical: 14,
     paddingHorizontal: Spacing.lg,
-    backgroundColor: Colors.light.primary,
+    backgroundColor: '#111111',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -47,6 +47,6 @@ const styles = StyleSheet.create({
     opacity: 0.42,
   },
   pressed: {
-    backgroundColor: Colors.light.primaryPressed,
+    backgroundColor: '#2A2A2A',
   },
 });
