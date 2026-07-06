@@ -140,6 +140,11 @@ Safety rules:
 - the order must have `product_id`
 - the linked product must exist, be active, and be mapped to DT One
 - the request must use the validated exact product payload
+- the DT One request endpoint is built from
+  `DTONE_API_BASE_URL + DTONE_TRANSACTIONS_PATH`
+- `DTONE_TRANSACTIONS_PATH` controls the create-transaction path
+- for synchronous transaction creation, use `/sync/transactions`
+- do not include DT One credentials in the endpoint configuration
 
 Status handling:
 
@@ -149,6 +154,7 @@ Status handling:
 
 The function returns only a safe summary of the DT One response.
 No automatic fulfillment is triggered from Stripe or anywhere else.
+Dry-run remains a safe preview only and never calls DT One.
 
 ## Dry-run preview
 

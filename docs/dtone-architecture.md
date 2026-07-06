@@ -11,6 +11,28 @@ phase. The mobile app must never call DT One directly.
 - Stripe payment and webhook logic stay separate from supplier fulfillment
 - No supplier request should be triggered directly from the app UI
 
+## DT One endpoint configuration
+
+Use the DT One base API URL only, without credentials, as the environment value
+for `DTONE_API_BASE_URL`.
+
+Example base URL:
+
+- `https://preprod-dvs-api.dtone.com/v1`
+
+The create-transaction path is controlled separately by
+`DTONE_TRANSACTIONS_PATH`.
+
+For synchronous transaction creation, use:
+
+- `/sync/transactions`
+
+The final request endpoint is built as:
+
+- `DTONE_API_BASE_URL + DTONE_TRANSACTIONS_PATH`
+
+Do not include credentials in these docs or in the configured URL itself.
+
 ## When fulfillment is allowed
 
 Future fulfillment should only run when all of these are true:
@@ -129,8 +151,8 @@ Manual live fulfillment:
 - is not triggered from Stripe
 - is not exposed as a user-facing button
 - uses the same validated payload data as dry run
-- posts to `DTONE_API_BASE_URL/transactions` with basic auth from
-  `DTONE_API_USERNAME` and `DTONE_API_PASSWORD`
+- posts to the configured DT One endpoint built from
+  `DTONE_API_BASE_URL + DTONE_TRANSACTIONS_PATH`
 - sends the actual DT One request only after the admin secret passes
 - uses `boulio-topup-order-<order_id>` as the idempotency/external id
 - stores only a safe supplier reference and status summary
