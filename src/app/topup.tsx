@@ -227,7 +227,10 @@ export default function TopUpScreen() {
     };
   }, [session]);
 
-  const activeSendProducts = useMemo(() => products.filter((product) => product.active), [products]);
+  const activeSendProducts = useMemo(
+    () => products.filter((product) => product.active && isUuid(product.id)),
+    [products]
+  );
   const displaySendProducts = useMemo(() => dedupeAirtimeProducts(activeSendProducts), [activeSendProducts]);
   const filteredSendProducts = useMemo(() => {
     const normalizedSearch = productSearch.trim().toLowerCase();
@@ -288,13 +291,19 @@ export default function TopUpScreen() {
 
   const selectedSendProductCandidate =
     products.find((product) => product.id === selectedSendProductId && product.active) ?? null;
+  const selectedSendProductIdIsUuid = Boolean(
+    selectedSendProductCandidate && isUuid(selectedSendProductCandidate.id)
+  );
   const selectedRequestProduct =
     requestBundleProducts.find((product) => product.id === selectedRequestProductId) ?? null;
   const sendPhoneValid = isValidHaitiMobilePhone(sendPhoneNumber);
   const detectedSendCarrier = sendPhoneValid ? detectHaitiCarrierFromPhone(sendPhoneNumber) : null;
   const confirmedSendCarrier = sendCarrier ?? detectedSendCarrier;
   const selectedSendProduct =
-    resolveSelectedTopUpProduct(activeSendProducts, selectedSendProductCandidate, confirmedSendCarrier);
+    selectedSendProductIdIsUuid
+      ? resolveSelectedTopUpProduct(activeSendProducts, selectedSendProductCandidate, confirmedSendCarrier)
+      : null;
+  const sendProductSelectionInvalid = Boolean(selectedSendProductCandidate && !selectedSendProductIdIsUuid);
   const carrierMismatch = Boolean(
     selectedSendProduct && confirmedSendCarrier && selectedSendProduct.carrier !== confirmedSendCarrier
   );
@@ -514,6 +523,11 @@ export default function TopUpScreen() {
   const requestStepLabel = `REQUEST STEP ${requestStep} OF 5`;
 
   const confirmSendOrder = async (skipProfileCheck = false) => {
+    if (selectedSendProductCandidate && !selectedSendProductIdIsUuid) {
+      setSendError('Product is not ready for checkout. Please refresh and try again.');
+      return;
+    }
+
     if (!selectedSendProduct) {
       setSendError(t('chooseAProductBeforeContinuing'));
       return;
@@ -760,6 +774,12 @@ export default function TopUpScreen() {
                         }}
                       />
                     ))
+                  ) : productsLoading ? (
+                    <Text style={styles.emptyText}>Loading products...</Text>
+                  ) : activeSendProducts.length === 0 ? (
+                    <Text style={styles.emptyText}>
+                      Product is not ready for checkout. Please refresh and try again.
+                    </Text>
                   ) : (
                     <Text style={styles.emptyText}>{t('noMatchingProducts')}</Text>
                   )}
@@ -817,6 +837,11 @@ export default function TopUpScreen() {
                       productCarrier: selectedSendProduct?.carrier ?? '',
                       detectedCarrier: detectedSendCarrier ?? confirmedSendCarrier ?? '',
                     })}
+                  </Text>
+                ) : null}
+                {sendProductSelectionInvalid ? (
+                  <Text style={styles.errorText}>
+                    Product is not ready for checkout. Please refresh and try again.
                   </Text>
                 ) : null}
                 <View style={styles.actionRow}>
@@ -1219,6 +1244,10 @@ function modeSubtitle(mode: UserMode) {
 
 function formatCurrency(value: number) {
   return Number.isInteger(value) ? `$${value}` : `$${value.toFixed(2)}`;
+}
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 const styles = StyleSheet.create({
