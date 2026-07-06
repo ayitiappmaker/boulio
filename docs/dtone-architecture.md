@@ -23,13 +23,24 @@ Example base URL:
 The create-transaction path is controlled separately by
 `DTONE_TRANSACTIONS_PATH`.
 
+The transaction lookup path is controlled separately by
+`DTONE_TRANSACTION_LOOKUP_PATH`.
+
 For synchronous transaction creation, use:
 
 - `/sync/transactions`
 
+For transaction lookup, use:
+
+- `/transactions`
+
 The final request endpoint is built as:
 
 - `DTONE_API_BASE_URL + DTONE_TRANSACTIONS_PATH`
+
+The final lookup endpoint is built as:
+
+- `DTONE_API_BASE_URL + DTONE_TRANSACTION_LOOKUP_PATH`
 
 Do not include credentials in these docs or in the configured URL itself.
 
@@ -110,11 +121,12 @@ It does not:
 
 ## Fulfillment modes
 
-The `fulfill-topup` Edge Function supports two locked-down server-only modes
+The `fulfill-topup` Edge Function supports three locked-down server-only modes
 for top-up orders:
 
 - `dry_run`
 - `live_manual`
+- `check_status`
 
 ### Dry run
 
@@ -129,6 +141,7 @@ Dry-run behavior:
 - keeps the database value as `509XXXXXXXX`
 - sends DT One `mobile_number` as `+509XXXXXXXX`
 - uses `bt_<uuid_without_hyphens>` for `external_id`
+- includes `auto_confirm: true` for live manual creation
 - returns a payload preview only
 - does not call DT One
 - does not create a transaction
@@ -158,6 +171,7 @@ Manual live fulfillment:
   `DTONE_API_BASE_URL + DTONE_TRANSACTIONS_PATH`
 - sends `mobile_number` as `+509XXXXXXXX`
 - sends `external_id` as `bt_<uuid_without_hyphens>`
+- includes `auto_confirm: true` so the transaction is confirmed on creation
 - sends the actual DT One request only after the admin secret passes
 - stores only a safe supplier reference and status summary
 - does not mark the order completed unless DT One confirms success
@@ -170,6 +184,39 @@ Response handling:
 
 The current schema does not include `fulfilled_at`, so no timestamp update is
 performed yet.
+
+### Manual status check
+
+`check_status` is locked down behind the same admin secret as `live_manual`:
+
+- `x-fulfillment-admin-secret`
+- `FULFILLMENT_ADMIN_SECRET`
+
+Manual status check:
+
+- is server-side only
+- is not triggered from Stripe
+- is not exposed as a user-facing button
+- only works for orders with `supplier_status` set to `pending` or `processing`
+- uses `supplier_reference`, or the derived `bt_<uuid_without_hyphens>` value if needed, to look up the DT One transaction
+- performs a status lookup only
+- does not create a new DT One transaction
+- does not call `live_manual` again
+- may receive an array response from DT One; the first transaction object is
+  used when present
+- keeps the order in `processing` when DT One is still pending
+- marks the order `completed` only when DT One reports success
+- marks the order `failed` when DT One reports failure
+
+The lookup endpoint is built from:
+
+- `DTONE_API_BASE_URL + DTONE_TRANSACTION_LOOKUP_PATH`
+
+The lookup query uses:
+
+- `?external_id=<supplier_reference>`
+
+The response returns a safe status summary only. No credentials are exposed.
 
 ## Language to avoid
 

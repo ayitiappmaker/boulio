@@ -144,10 +144,13 @@ Safety rules:
   `DTONE_API_BASE_URL + DTONE_TRANSACTIONS_PATH`
 - `DTONE_TRANSACTIONS_PATH` controls the create-transaction path
 - for synchronous transaction creation, use `/sync/transactions`
+- `DTONE_TRANSACTION_LOOKUP_PATH` controls the status lookup path
+- for transaction lookup, use `/transactions`
 - do not include DT One credentials in the endpoint configuration
 - the stored phone stays `509XXXXXXXX`
 - the DT One payload sends `+509XXXXXXXX`
 - the DT One payload uses `bt_<uuid_without_hyphens>` for `external_id`
+- `live_manual` sends `auto_confirm: true`
 
 Status handling:
 
@@ -158,6 +161,39 @@ Status handling:
 The function returns only a safe summary of the DT One response.
 No automatic fulfillment is triggered from Stripe or anywhere else.
 Dry-run remains a safe preview only and never calls DT One.
+
+## Manual status check
+
+The `fulfill-topup` Edge Function also supports a locked-down
+`check_status` mode for manual reconciliation.
+
+Safety rules:
+
+- the request must include `x-fulfillment-admin-secret`
+- the header value must match `FULFILLMENT_ADMIN_SECRET`
+- the order must already exist and be paid
+- the order must have `supplier_status` of `pending` or `processing`
+- the lookup uses `supplier_reference` or the derived `bt_<uuid_without_hyphens>` value
+- the function must only read DT One status, not create a transaction
+- `live_manual` must not be called again
+- DT One may return an array for the lookup; use the first transaction object
+  when one is present and treat an empty array as not found
+
+Status handling:
+
+- successful DT One status -> `supplier_status = successful`, `status = completed`
+- pending or processing DT One status -> keep `supplier_status = pending`, `status = processing`
+- failed DT One status -> `supplier_status = failed`, `status = failed`
+
+The lookup endpoint is built from:
+
+- `DTONE_API_BASE_URL + DTONE_TRANSACTION_LOOKUP_PATH`
+
+The lookup query uses:
+
+- `?external_id=<supplier_reference>`
+
+The response returns a safe reconciliation summary only.
 
 ## Dry-run preview
 

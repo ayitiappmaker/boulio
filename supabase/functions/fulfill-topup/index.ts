@@ -20,7 +20,7 @@
 // returns a confirmed success response.
 
 type FulfillmentTargetType = "topup_order" | "data_request";
-type FulfillmentMode = "dry_run" | "live_manual";
+type FulfillmentMode = "dry_run" | "live_manual" | "check_status";
 
 type FulfillTopupRequest = {
   target_type?: FulfillmentTargetType;
@@ -69,6 +69,7 @@ type PreparedFulfillment = {
       mobile_number: string;
     };
     external_id: string;
+    auto_confirm: true;
   };
 };
 
@@ -119,11 +120,49 @@ type LiveManualSuccessResponse = {
   message: string;
 };
 
+type CheckStatusSuccessResponse = {
+  ok: true;
+  dry_run: false;
+  check_status: true;
+  ready_for_fulfillment: true;
+  target_type: "topup_order";
+  target_id: string;
+  order: {
+    id: string;
+    carrier: string;
+    recipient_phone: string;
+    product_name: string;
+    amount_usd: string;
+    service_fee_usd: string;
+    total_usd: string;
+    status: string;
+    supplier_status: string;
+    supplier_reference: string | null;
+  };
+  dtone_status: number;
+  dtone_transaction_id: string | null;
+  dtone_external_id: string | null;
+  dtone_status_summary: string;
+  message: string;
+};
+
+type DtOneConfigOk = {
+  ok: true;
+  baseUrl: string;
+  username: string;
+  password: string;
+  transactionsPath: string;
+  transactionLookupPath: string;
+};
+
 type LiveManualFailureDetails = {
   dtone_status?: number;
   dtone_body_excerpt?: string;
   dtone_response_excerpt?: string;
   dtone_endpoint?: string;
+  dtone_transaction_id?: string | null;
+  dtone_external_id?: string | null;
+  dtone_status_summary?: string | null;
 };
 
 type FulfillmentErrorCode =
@@ -139,7 +178,8 @@ type FulfillmentErrorCode =
   | "DTONE_NOT_CONFIGURED"
   | "DTONE_REQUEST_FAILED"
   | "DTONE_HTTP_ERROR"
-  | "DTONE_INVALID_RESPONSE";
+  | "DTONE_INVALID_RESPONSE"
+  | "DTONE_TRANSACTION_NOT_FOUND";
 
 type FulfillmentErrorResponse = {
   ok: false;
@@ -216,7 +256,9 @@ Deno.serve(async (req) => {
   if (
     targetType !== "topup_order" ||
     !targetId ||
-    (mode !== "dry_run" && mode !== "live_manual")
+    (mode !== "dry_run" &&
+      mode !== "live_manual" &&
+      mode !== "check_status")
   ) {
     return jsonResponse(
       400,
@@ -224,13 +266,13 @@ Deno.serve(async (req) => {
         targetId ?? "unknown",
         false,
         "INVALID_REQUEST",
-        "target_type must be topup_order, mode must be dry_run or live_manual, and target_id is required.",
+        "target_type must be topup_order, mode must be dry_run, live_manual, or check_status, and target_id is required.",
       ),
       corsHeaders,
     );
   }
 
-  if (mode === "live_manual") {
+  if (mode === "live_manual" || mode === "check_status") {
     const adminSecret = Deno.env.get("FULFILLMENT_ADMIN_SECRET")?.trim();
     const requestSecret = req.headers.get("x-fulfillment-admin-secret")?.trim();
 
@@ -302,6 +344,23 @@ Deno.serve(async (req) => {
       buildDryRunResponse(readiness.prepared),
       corsHeaders,
     );
+  }
+
+  if (mode === "check_status") {
+    const liveResult = await runCheckStatusReconciliation(
+      baseUrl,
+      serviceRoleKey,
+      readiness.prepared,
+    );
+    if (!liveResult.ok) {
+      return jsonResponse(
+        liveResult.httpStatus,
+        liveResult.response,
+        corsHeaders,
+      );
+    }
+
+    return jsonResponse(200, liveResult.response, corsHeaders);
   }
 
   const liveResult = await runLiveManualFulfillment(
@@ -600,6 +659,239 @@ async function runLiveManualFulfillment(
   };
 }
 
+async function runCheckStatusReconciliation(
+  baseUrl: string,
+  serviceRoleKey: string,
+  prepared: PreparedFulfillment,
+): Promise<
+  | { ok: true; response: CheckStatusSuccessResponse }
+  | { ok: false; httpStatus: number; response: FulfillmentErrorResponse }
+> {
+  const dtoneConfig = getDtoneConfig();
+  if (!dtoneConfig.ok) {
+    return {
+      ok: false,
+      httpStatus: 500,
+      response: errorResponse(
+        prepared.order.id,
+        false,
+        "DTONE_NOT_CONFIGURED",
+        dtoneConfig.message,
+        true,
+      ),
+    };
+  }
+
+  if (
+    prepared.order.supplier_status !== "pending" &&
+    prepared.order.supplier_status !== "processing"
+  ) {
+    return {
+      ok: false,
+      httpStatus: 409,
+      response: errorResponse(
+        prepared.order.id,
+        false,
+        "FULFILLMENT_NOT_READY",
+        "Status check requires supplier_status to be pending or processing.",
+        true,
+      ),
+    };
+  }
+
+  const lookupReference =
+    normalizeText(prepared.order.supplier_reference) ?? prepared.externalId;
+
+  let dtoneResponse;
+  try {
+    dtoneResponse = await callDtOneStatusLookup(lookupReference, dtoneConfig);
+  } catch (error) {
+    return {
+      ok: false,
+      httpStatus: 502,
+      response: errorResponse(
+        prepared.order.id,
+        false,
+        "DTONE_REQUEST_FAILED",
+        getSafeErrorMessage(error),
+        true,
+      ),
+    };
+  }
+
+  if (!dtoneResponse.ok) {
+    return {
+      ok: false,
+      httpStatus: dtoneResponse.httpStatus,
+      response: errorResponse(
+        prepared.order.id,
+        false,
+        "DTONE_HTTP_ERROR",
+        "DT One returned an HTTP error response while checking status.",
+        true,
+        {
+          dtone_status: dtoneResponse.httpStatus,
+          dtone_body_excerpt: truncateSafe(dtoneResponse.rawText, 500),
+          dtone_endpoint: dtoneResponse.endpoint,
+        },
+      ),
+    };
+  }
+
+  const lookupSummary = summarizeDtOneTransactionLookup(
+    dtoneResponse.httpStatus,
+    dtoneResponse.body,
+    lookupReference,
+  );
+
+  if (lookupSummary.kind === "not_found") {
+    return {
+      ok: false,
+      httpStatus: 404,
+      response: errorResponse(
+        prepared.order.id,
+        false,
+        "DTONE_TRANSACTION_NOT_FOUND",
+        "DT One transaction was not found for the supplied external id.",
+        true,
+        {
+          dtone_status: dtoneResponse.httpStatus,
+          dtone_endpoint: dtoneResponse.endpoint,
+          dtone_external_id: lookupReference,
+          dtone_status_summary: lookupSummary.statusSummary,
+        },
+      ),
+    };
+  }
+
+  if (lookupSummary.kind === "invalid") {
+    return {
+      ok: false,
+      httpStatus: 502,
+      response: errorResponse(
+        prepared.order.id,
+        false,
+        "DTONE_INVALID_RESPONSE",
+        "DT One returned an invalid JSON response while checking status.",
+        true,
+        {
+          dtone_status: dtoneResponse.httpStatus,
+          dtone_response_excerpt: truncateSafe(dtoneResponse.rawText, 500),
+          dtone_endpoint: dtoneResponse.endpoint,
+          dtone_status_summary: lookupSummary.statusSummary,
+        },
+      ),
+    };
+  }
+
+  const supplierReference =
+    lookupSummary.externalId ?? lookupReference;
+
+  if (lookupSummary.outcome === "success") {
+    await updateTopUpOrder(baseUrl, serviceRoleKey, prepared.order.id, {
+      supplier_status: "successful",
+      status: "completed",
+      supplier_reference: supplierReference,
+    });
+
+    return {
+      ok: true,
+      response: {
+        ok: true,
+        dry_run: false,
+        check_status: true,
+        ready_for_fulfillment: true,
+        target_type: "topup_order",
+        target_id: prepared.order.id,
+        order: {
+          id: prepared.order.id,
+          carrier: prepared.order.carrier,
+          recipient_phone: prepared.recipientPhone,
+          product_name: prepared.order.product_name,
+          amount_usd: toMoneyString(prepared.order.amount_usd),
+          service_fee_usd: toMoneyString(prepared.order.service_fee_usd),
+          total_usd: toMoneyString(prepared.order.total_usd),
+          status: "completed",
+          supplier_status: "successful",
+          supplier_reference: supplierReference,
+        },
+        dtone_status: lookupSummary.dtoneStatus,
+        dtone_transaction_id: lookupSummary.transactionId,
+        dtone_external_id: lookupSummary.externalId,
+        dtone_status_summary: lookupSummary.statusSummary,
+        message:
+          "DT One transaction is successful. Order was marked completed.",
+      },
+    };
+  }
+
+  if (lookupSummary.outcome === "pending") {
+    return {
+      ok: true,
+      response: {
+        ok: true,
+        dry_run: false,
+        check_status: true,
+        ready_for_fulfillment: true,
+        target_type: "topup_order",
+        target_id: prepared.order.id,
+        order: {
+          id: prepared.order.id,
+          carrier: prepared.order.carrier,
+          recipient_phone: prepared.recipientPhone,
+          product_name: prepared.order.product_name,
+          amount_usd: toMoneyString(prepared.order.amount_usd),
+          service_fee_usd: toMoneyString(prepared.order.service_fee_usd),
+          total_usd: toMoneyString(prepared.order.total_usd),
+          status: prepared.order.status,
+          supplier_status: prepared.order.supplier_status,
+          supplier_reference: supplierReference,
+        },
+        dtone_status: lookupSummary.dtoneStatus,
+        dtone_transaction_id: lookupSummary.transactionId,
+        dtone_external_id: lookupSummary.externalId,
+        dtone_status_summary: lookupSummary.statusSummary,
+        message: "DT One transaction is still pending or processing.",
+      },
+    };
+  }
+
+  await updateTopUpOrder(baseUrl, serviceRoleKey, prepared.order.id, {
+    supplier_status: "failed",
+    status: "failed",
+    supplier_reference: supplierReference,
+  });
+
+  return {
+    ok: true,
+    response: {
+      ok: true,
+      dry_run: false,
+      check_status: true,
+      ready_for_fulfillment: true,
+      target_type: "topup_order",
+      target_id: prepared.order.id,
+      order: {
+        id: prepared.order.id,
+        carrier: prepared.order.carrier,
+        recipient_phone: prepared.recipientPhone,
+        product_name: prepared.order.product_name,
+        amount_usd: toMoneyString(prepared.order.amount_usd),
+        service_fee_usd: toMoneyString(prepared.order.service_fee_usd),
+        total_usd: toMoneyString(prepared.order.total_usd),
+        status: "failed",
+        supplier_status: "failed",
+        supplier_reference: supplierReference,
+      },
+      dtone_status: lookupSummary.dtoneStatus,
+      dtone_transaction_id: lookupSummary.transactionId,
+      dtone_external_id: lookupSummary.externalId,
+      dtone_status_summary: lookupSummary.statusSummary,
+      message: "DT One transaction failed. Order was marked failed.",
+    },
+  };
+}
+
 function validateTopUpOrderReadiness(order: TopUpOrderRow) {
   if (order.payment_status !== "paid") {
     return {
@@ -791,6 +1083,7 @@ function buildDtOnePayloadPreview(
       mobile_number: recipientPhone,
     },
     external_id: externalId,
+    auto_confirm: true as const,
   };
 }
 
@@ -880,6 +1173,10 @@ function getDtoneConfig() {
     Deno.env.get("DTONE_TRANSACTIONS_PATH"),
     "/transactions",
   );
+  const transactionLookupPath = normalizeUrlPath(
+    Deno.env.get("DTONE_TRANSACTION_LOOKUP_PATH"),
+    "/transactions",
+  );
 
   if (!baseUrl || !username || !password) {
     return {
@@ -894,12 +1191,13 @@ function getDtoneConfig() {
     username,
     password,
     transactionsPath,
+    transactionLookupPath,
   };
 }
 
 async function callDtOne(
   payload: PreparedFulfillment["payloadPreview"],
-  config: Extract<ReturnType<typeof getDtoneConfig>, { ok: true }>,
+  config: DtOneConfigOk,
 ) {
   const controller = new AbortController();
   const endpoint = buildUrl(config.baseUrl, config.transactionsPath);
@@ -935,6 +1233,46 @@ async function callDtOne(
   }
 }
 
+async function callDtOneStatusLookup(
+  lookupReference: string,
+  config: DtOneConfigOk,
+) {
+  const controller = new AbortController();
+  const endpoint = buildUrlWithQuery(
+    config.baseUrl,
+    config.transactionLookupPath,
+    `external_id=${encodeURIComponent(lookupReference)}`,
+  );
+  const timeoutId = setTimeout(
+    () => controller.abort("DT One request timed out after 20 seconds."),
+    20_000,
+  );
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "GET",
+      headers: {
+        Authorization: buildBasicAuthHeader(config.username, config.password),
+        Accept: "application/json",
+      },
+      signal: controller.signal,
+    });
+
+    const rawText = await response.text().catch(() => "");
+    const parsedBody = parseJsonValue(rawText);
+
+    return {
+      httpStatus: response.status,
+      ok: response.ok,
+      body: parsedBody,
+      rawText,
+      endpoint,
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 function buildBasicAuthHeader(username: string, password: string) {
   const encoded = btoa(`${username}:${password}`);
   return `Basic ${encoded}`;
@@ -952,6 +1290,18 @@ function parseJsonRecord(value: string): Record<string, unknown> | null {
     }
 
     return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function parseJsonValue(value: string): unknown | null {
+  if (!value.trim()) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(value) as unknown;
   } catch {
     return null;
   }
@@ -985,6 +1335,10 @@ function normalizeUrlPath(
 
 function buildUrl(baseUrl: string, path: string) {
   return `${baseUrl}${path}`;
+}
+
+function buildUrlWithQuery(baseUrl: string, path: string, query: string) {
+  return `${baseUrl}${path}?${query}`;
 }
 
 function summarizeDtOneResponse(result: {
@@ -1054,6 +1408,258 @@ function summarizeDtOneResponse(result: {
       reference,
     },
   };
+}
+
+type DtOneTransactionLookupSummary =
+  | {
+      kind: "not_found";
+      dtoneStatus: number;
+      statusSummary: string;
+    }
+  | {
+      kind: "invalid";
+      dtoneStatus: number;
+      statusSummary: string;
+    }
+  | {
+      kind: "ok";
+      dtoneStatus: number;
+      transactionId: string | null;
+      externalId: string | null;
+      statusSummary: string;
+      outcome: "success" | "pending" | "failed";
+    };
+
+function summarizeDtOneTransactionLookup(
+  httpStatus: number,
+  body: unknown,
+  lookupReference: string,
+): DtOneTransactionLookupSummary {
+  const transaction = extractDtOneTransactionRecord(body);
+  if (transaction.kind === "not_found") {
+    return {
+      kind: "not_found",
+      dtoneStatus: httpStatus,
+      statusSummary: "DT One returned an empty transaction list.",
+    };
+  }
+
+  if (transaction.kind === "invalid") {
+    return {
+      kind: "invalid",
+      dtoneStatus: httpStatus,
+      statusSummary:
+        "DT One lookup response was not a valid transaction object or array.",
+    };
+  }
+
+  const transactionRecord = transaction.transaction;
+  const transactionId = firstNonEmptyString([
+    getTextAtPath(transactionRecord, ["id"]),
+    getTextAtPath(transactionRecord, ["transaction_id"]),
+    getTextAtPath(transactionRecord, ["reference"]),
+  ]);
+  const externalId = firstNonEmptyString([
+    getTextAtPath(transactionRecord, ["external_id"]),
+  ]) ?? lookupReference;
+  const topLevelStatus = firstNonEmptyString([
+    getTextAtPath(transactionRecord, ["transaction_status"]),
+    getTextAtPath(transactionRecord, ["status"]),
+  ]);
+  const statusClassMessage = getTextAtPath(transactionRecord, [
+    "status",
+    "class",
+    "message",
+  ]);
+  const statusMessage = getTextAtPath(transactionRecord, ["status", "message"]);
+  const statusCode = firstNonEmptyString([
+    getTextAtPath(transactionRecord, ["status", "code"]),
+  ]);
+  const confirmationDate = firstNonEmptyString([
+    getTextAtPath(transactionRecord, ["confirmation_date"]),
+  ]);
+  const confirmationExpirationDate = firstNonEmptyString([
+    getTextAtPath(transactionRecord, ["confirmation_expiration_date"]),
+  ]);
+
+  const statusSummary = buildDtOneStatusSummary({
+    transactionStatus: topLevelStatus,
+    statusClassMessage,
+    statusMessage,
+    statusCode,
+    confirmationDate,
+    confirmationExpirationDate,
+  });
+
+  const outcome = classifyDtOneTransactionStatus({
+    transactionStatus: topLevelStatus,
+    statusClassMessage,
+    statusMessage,
+    statusCode,
+    confirmationDate,
+    confirmationExpirationDate,
+  });
+
+  return {
+    kind: "ok",
+    dtoneStatus: httpStatus,
+    transactionId,
+    externalId,
+    statusSummary,
+    outcome,
+  };
+}
+
+function extractDtOneTransactionRecord(
+  body: unknown,
+):
+  | { kind: "ok"; transaction: Record<string, unknown> }
+  | { kind: "not_found" }
+  | { kind: "invalid" } {
+  if (Array.isArray(body)) {
+    if (body.length === 0) {
+      return { kind: "not_found" };
+    }
+
+    const firstItem = body[0];
+    if (!isPlainRecord(firstItem)) {
+      return { kind: "invalid" };
+    }
+
+    return { kind: "ok", transaction: firstItem };
+  }
+
+  if (isPlainRecord(body)) {
+    return { kind: "ok", transaction: body };
+  }
+
+  return { kind: "invalid" };
+}
+
+function buildDtOneStatusSummary(fields: {
+  transactionStatus: string | null;
+  statusClassMessage: string | null;
+  statusMessage: string | null;
+  statusCode: string | null;
+  confirmationDate: string | null;
+  confirmationExpirationDate: string | null;
+}) {
+  const parts = [
+    fields.transactionStatus
+      ? `transaction_status=${fields.transactionStatus}`
+      : null,
+    fields.statusClassMessage
+      ? `status.class.message=${fields.statusClassMessage}`
+      : null,
+    fields.statusMessage ? `status.message=${fields.statusMessage}` : null,
+    fields.statusCode ? `status.code=${fields.statusCode}` : null,
+    fields.confirmationDate
+      ? `confirmation_date=${fields.confirmationDate}`
+      : null,
+    fields.confirmationExpirationDate
+      ? `confirmation_expiration_date=${fields.confirmationExpirationDate}`
+      : null,
+  ].filter((part): part is string => Boolean(part));
+
+  return parts.length > 0
+    ? truncateSafe(parts.join("; "), 240) ??
+        "DT One transaction status returned."
+    : "DT One transaction status returned without a recognized status field.";
+}
+
+function classifyDtOneTransactionStatus(fields: {
+  transactionStatus: string | null;
+  statusClassMessage: string | null;
+  statusMessage: string | null;
+  statusCode: string | null;
+  confirmationDate: string | null;
+  confirmationExpirationDate: string | null;
+}): "success" | "pending" | "failed" {
+  const values = [
+    fields.transactionStatus,
+    fields.statusClassMessage,
+    fields.statusMessage,
+    fields.statusCode,
+    fields.confirmationDate ? "confirmed" : null,
+    fields.confirmationExpirationDate ? "expires" : null,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .map((value) => value.toLowerCase());
+
+  const hasFailure = values.some((value) =>
+    [
+      "failed",
+      "failure",
+      "rejected",
+      "reject",
+      "cancelled",
+      "canceled",
+      "declined",
+      "error",
+      "void",
+    ].some((needle) => value.includes(needle)),
+  );
+  if (hasFailure) {
+    return "failed";
+  }
+
+  const hasSuccess = values.some((value) =>
+    [
+      "successful",
+      "success",
+      "confirmed",
+      "completed",
+      "complete",
+      "approved",
+      "succeeded",
+    ].some((needle) => value.includes(needle)),
+  );
+  if (hasSuccess) {
+    return "success";
+  }
+
+  return "pending";
+}
+
+function getTextAtPath(value: unknown, path: string[]) {
+  let current: unknown = value;
+
+  for (const key of path) {
+    if (!isPlainRecord(current)) {
+      return null;
+    }
+
+    current = current[key];
+  }
+
+  return toTextValue(current);
+}
+
+function firstNonEmptyString(values: Array<string | null>) {
+  for (const value of values) {
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function toTextValue(value: unknown) {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  return null;
 }
 
 function truncateSafe(value: string | null | undefined, maxLength: number) {
