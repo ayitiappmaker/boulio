@@ -7,6 +7,26 @@ const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY?.trim();
 
 export type AdminFulfillmentAction = 'dry_run' | 'live_manual' | 'check_status';
 
+export type AdminFulfillmentLogRecord = {
+  id: string;
+  createdAt: string;
+  adminUserId: string | null;
+  adminEmail: string | null;
+  action: string;
+  targetType: string;
+  targetId: string;
+  orderStatusBefore: string | null;
+  supplierStatusBefore: string | null;
+  orderStatusAfter: string | null;
+  supplierStatusAfter: string | null;
+  ok: boolean | null;
+  responseCode: string | null;
+  responseMessage: string | null;
+  supplierReference: string | null;
+  dtoneTransactionId: string | null;
+  safeResponse: Record<string, unknown> | null;
+};
+
 export type AdminFulfillmentOrderRecord = {
   id: string;
   createdAt: string;
@@ -34,6 +54,19 @@ export type AdminFulfillmentListResult =
       message: string;
     };
 
+export type AdminFulfillmentLogListResult =
+  | {
+      ok: true;
+      action: 'list_logs';
+      message: string;
+      logs: AdminFulfillmentLogRecord[];
+    }
+  | {
+      ok: false;
+      code: string;
+      message: string;
+    };
+
 export type AdminFulfillmentActionResult =
   | Record<string, unknown>
   | {
@@ -44,6 +77,10 @@ export type AdminFulfillmentActionResult =
 
 export async function fetchAdminFulfillmentOrders(): Promise<AdminFulfillmentListResult> {
   return (await sendAdminFulfillmentRequest({ action: 'list' })) as AdminFulfillmentListResult;
+}
+
+export async function fetchAdminFulfillmentLogs(): Promise<AdminFulfillmentLogListResult> {
+  return (await sendAdminFulfillmentRequest({ action: 'list_logs' })) as AdminFulfillmentLogListResult;
 }
 
 export async function runAdminFulfillmentAction(
