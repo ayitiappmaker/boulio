@@ -10,6 +10,12 @@ export type FulfillmentSummary = {
   ready: boolean;
 };
 
+export type TopUpOrderCustomerSummary = {
+  label: string;
+  detail: string;
+  tone: 'neutral' | 'success' | 'warning' | 'danger';
+};
+
 type TopUpFulfillmentTarget = Pick<
   TopUpOrderRecord,
   'status' | 'paymentStatus' | 'supplierStatus'
@@ -56,6 +62,40 @@ export function getFulfillmentSummary(target: FulfillmentTarget): FulfillmentSum
   }
 
   return summarizeDataRequestFulfillment(target);
+}
+
+export function getTopUpOrderCustomerSummary(
+  target: Pick<TopUpOrderRecord, 'status' | 'paymentStatus' | 'supplierStatus'>
+): TopUpOrderCustomerSummary {
+  if (target.status === 'completed' || target.supplierStatus === 'successful') {
+    return {
+      label: t('topUpCompleted'),
+      detail: t('topUpCompletedDetail'),
+      tone: 'success',
+    };
+  }
+
+  if (target.status === 'failed' || target.supplierStatus === 'failed') {
+    return {
+      label: t('orderNeedsReview'),
+      detail: t('orderNeedsReviewDetail'),
+      tone: 'danger',
+    };
+  }
+
+  if (target.paymentStatus !== 'paid' || target.status === 'pending_payment') {
+    return {
+      label: t('paymentPending'),
+      detail: t('paymentPendingDetail'),
+      tone: 'warning',
+    };
+  }
+
+  return {
+    label: t('paymentReceived'),
+    detail: t('topUpBeingProcessedDetail'),
+    tone: 'warning',
+  };
 }
 
 function summarizeTopUpFulfillment(target: TopUpFulfillmentTarget): FulfillmentSummary {
