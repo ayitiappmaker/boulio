@@ -71,7 +71,6 @@ export default function CheckoutSuccessScreen() {
         </View>
         <Text style={styles.title}>{successSummary.title}</Text>
         <Text style={styles.subtitle}>{successSummary.subtitle}</Text>
-        <Text style={styles.helper}>{t('checkStatusInAccount')}</Text>
       </View>
 
       {loading ? (
