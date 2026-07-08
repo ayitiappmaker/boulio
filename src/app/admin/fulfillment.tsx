@@ -21,6 +21,7 @@ import {
 
 type FilterKey = 'needs_review' | 'pending_supplier' | 'completed' | 'failed' | 'all';
 type ManualAction = Exclude<AdminFulfillmentAction, 'list'>;
+type BadgeTone = 'neutral' | 'success' | 'warning' | 'danger';
 
 const FILTERS: Array<{ key: FilterKey; label: string }> = [
   { key: 'needs_review', label: 'Needs Review' },
@@ -47,7 +48,15 @@ export default function AdminFulfillmentScreen() {
     void loadOrders();
   }, []);
 
-  const visibleOrders = useMemo(() => orders.filter((order) => matchesFilter(order, activeFilter)), [orders, activeFilter]);
+  const visibleOrders = useMemo(() => {
+    const filtered = orders.filter((order) => matchesFilter(order, activeFilter));
+
+    if (activeFilter !== 'needs_review') {
+      return filtered;
+    }
+
+    return [...filtered].sort(compareNeedsReviewOrders);
+  }, [orders, activeFilter]);
 
   async function loadOrders(nextMode: 'initial' | 'refresh' = 'initial') {
     if (nextMode === 'initial') {
@@ -184,7 +193,10 @@ export default function AdminFulfillmentScreen() {
                       <Text style={styles.orderCreatedAt}>{formatCreatedAt(order.createdAt)}</Text>
                       <Text style={styles.orderId}>{shortOrderId(order.id)}</Text>
                     </View>
-                    <StatusBadge label={order.status} tone={statusTone(order.status)} />
+                    <View style={styles.orderHeaderBadges}>
+                      <StatusBadge label={order.status} tone={statusTone(order.status)} />
+                      <StatusBadge {...getSupplierBadge(order)} />
+                    </View>
                   </View>
 
                   <View style={styles.detailGrid}>
@@ -193,7 +205,7 @@ export default function AdminFulfillmentScreen() {
                     <Detail label="Phone" value={order.recipientPhone} />
                     <Detail label="Total USD" value={formatMoney(order.totalUsd)} />
                     <Detail label="Payment" value={order.paymentStatus} />
-                    <Detail label="Supplier" value={order.supplierStatus ?? 'null'} />
+                    <Detail label="Supplier" value={getSupplierBadge(order).label} />
                     <Detail label="Supplier ref" value={order.supplierReference ?? '-'} mono />
                   </View>
 
@@ -218,8 +230,9 @@ export default function AdminFulfillmentScreen() {
                     />
                   </View>
 
+                  <Text style={styles.hintText}>{getSupplierHelperLine(order)}</Text>
                   {!isActionAllowed('live_manual', order) ? (
-                    <Text style={styles.hintText}>{getActionBlockReason('live_manual', order)}</Text>
+                    <Text style={styles.hintTextSecondary}>{getActionBlockReason('live_manual', order)}</Text>
                   ) : null}
                 </View>
               ))}
@@ -339,6 +352,29 @@ function matchesFilter(order: AdminFulfillmentOrderRecord, filter: FilterKey) {
   return order.status === 'failed' || order.supplierStatus === 'failed';
 }
 
+function compareNeedsReviewOrders(left: AdminFulfillmentOrderRecord, right: AdminFulfillmentOrderRecord) {
+  const leftRank = getNeedsReviewPriority(left);
+  const rightRank = getNeedsReviewPriority(right);
+
+  if (leftRank !== rightRank) {
+    return leftRank - rightRank;
+  }
+
+  return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+}
+
+function getNeedsReviewPriority(order: AdminFulfillmentOrderRecord) {
+  if ((order.supplierStatus == null || order.supplierStatus === 'not_sent') && !normalizeText(order.supplierReference)) {
+    return 0;
+  }
+
+  if (order.supplierStatus === 'pending') {
+    return 1;
+  }
+
+  return 2;
+}
+
 function isActionAllowed(action: ManualAction, order: AdminFulfillmentOrderRecord) {
   if (action === 'dry_run') {
     return order.paymentStatus === 'paid' && (order.status === 'paid' || order.status === 'processing');
@@ -397,6 +433,55 @@ function actionLabel(action: ManualAction) {
   if (action === 'dry_run') return 'Dry Run';
   if (action === 'live_manual') return 'Live Manual Fulfill';
   return 'Check Status';
+}
+
+function getSupplierBadge(order: AdminFulfillmentOrderRecord): { label: string; tone: BadgeTone } {
+  const supplierReference = normalizeText(order.supplierReference);
+
+  if (order.status === 'completed') {
+    return { label: 'Completed', tone: 'success' };
+  }
+
+  if (order.supplierStatus === 'successful') {
+    return { label: 'Successful', tone: 'success' };
+  }
+
+  if (order.supplierStatus === 'pending') {
+    return { label: 'Pending Supplier', tone: 'warning' };
+  }
+
+  if (order.supplierStatus === 'failed') {
+    return { label: 'Failed', tone: 'danger' };
+  }
+
+  if ((order.supplierStatus == null || order.supplierStatus === 'not_sent') && !supplierReference) {
+    return { label: 'Not Sent', tone: 'warning' };
+  }
+
+  return {
+    label: order.supplierStatus ?? order.status,
+    tone: statusTone(order.supplierStatus ?? order.status),
+  };
+}
+
+function getSupplierHelperLine(order: AdminFulfillmentOrderRecord) {
+  if (order.status === 'completed' || order.supplierStatus === 'successful') {
+    return 'Fulfillment completed.';
+  }
+
+  if (order.supplierStatus === 'pending') {
+    return 'Run Check Status to reconcile.';
+  }
+
+  if (order.supplierStatus === 'failed') {
+    return 'Review manually. Do not retry blindly.';
+  }
+
+  if ((order.supplierStatus == null || order.supplierStatus === 'not_sent') && !normalizeText(order.supplierReference)) {
+    return 'Ready for Live Manual Fulfill.';
+  }
+
+  return `Supplier status: ${order.supplierStatus ?? order.status}.`;
 }
 
 function shortOrderId(orderId: string) {
@@ -673,6 +758,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: Spacing.md,
   },
+  orderHeaderBadges: {
+    alignItems: 'flex-end',
+    gap: Spacing.xs,
+  },
   orderHeaderText: {
     flex: 1,
     gap: 2,
@@ -798,6 +887,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     color: Colors.light.textTertiary,
+  },
+  hintTextSecondary: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: Colors.light.textSecondary,
   },
   resultCard: {
     borderRadius: Radius.xl,
