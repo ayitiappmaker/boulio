@@ -236,6 +236,9 @@ The admin fulfillment screen is manual-only and internal:
 - the screen can run `dry_run`, `live_manual`, and `check_status`
 - `live_manual` creates a DT One transaction once
 - `check_status` only reconciles an existing transaction
+- each manual action is audit logged server-side in `public.fulfillment_action_logs`
+- audit rows must not store DT One credentials or other secrets
+- no automatic fulfillment is triggered from Stripe yet
 
 ## Language to avoid
 

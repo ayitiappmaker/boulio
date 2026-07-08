@@ -12,10 +12,12 @@ import {
 
 import { Colors, Radius, Spacing } from '@/constants/theme';
 import {
+  fetchAdminFulfillmentLogs,
   fetchAdminFulfillmentOrders,
   runAdminFulfillmentAction,
   type AdminFulfillmentAction,
   type AdminFulfillmentActionResult,
+  type AdminFulfillmentLogRecord,
   type AdminFulfillmentOrderRecord,
 } from '@/lib/adminFulfillment';
 
@@ -40,12 +42,15 @@ export default function AdminFulfillmentScreen() {
   const [pageMessage, setPageMessage] = useState<string | null>(null);
   const [lastResultLabel, setLastResultLabel] = useState<string>('Latest response');
   const [lastResult, setLastResult] = useState<AdminFulfillmentActionResult | null>(null);
+  const [recentActions, setRecentActions] = useState<AdminFulfillmentLogRecord[]>([]);
+  const [recentActionsLoading, setRecentActionsLoading] = useState(true);
+  const [recentActionsError, setRecentActionsError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [pendingAction, setPendingAction] = useState<{ action: ManualAction; order: AdminFulfillmentOrderRecord } | null>(null);
   const [confirmationValue, setConfirmationValue] = useState('');
 
   useEffect(() => {
-    void loadOrders();
+    void loadDashboardData();
   }, []);
 
   const visibleOrders = useMemo(() => {
@@ -58,26 +63,46 @@ export default function AdminFulfillmentScreen() {
     return [...filtered].sort(compareNeedsReviewOrders);
   }, [orders, activeFilter]);
 
-  async function loadOrders(nextMode: 'initial' | 'refresh' = 'initial') {
+  async function loadDashboardData(nextMode: 'initial' | 'refresh' = 'initial') {
     if (nextMode === 'initial') {
       setLoading(true);
+      setRecentActionsLoading(true);
     } else {
       setRefreshing(true);
+      setRecentActionsLoading(true);
     }
 
-    const result = await fetchAdminFulfillmentOrders();
-    if (result.ok) {
-      setOrders(result.orders);
+    const [ordersResult, logsResult] = await Promise.allSettled([
+      fetchAdminFulfillmentOrders(),
+      fetchAdminFulfillmentLogs(),
+    ]);
+
+    if (ordersResult.status === 'fulfilled' && ordersResult.value.ok) {
+      setOrders(ordersResult.value.orders);
       setPageError(null);
-      setPageMessage(result.message);
+      setPageMessage(ordersResult.value.message);
+    } else if (ordersResult.status === 'fulfilled') {
+      setOrders([]);
+      setPageMessage(null);
+      setPageError(ordersResult.value.message);
     } else {
       setOrders([]);
       setPageMessage(null);
-      setPageError(result.message);
+      setPageError('Admin fulfillment orders could not be loaded.');
+    }
+
+    if (logsResult.status === 'fulfilled' && logsResult.value.ok) {
+      setRecentActions(logsResult.value.logs);
+      setRecentActionsError(null);
+    } else if (logsResult.status === 'fulfilled') {
+      setRecentActionsError(logsResult.value.message);
+    } else {
+      setRecentActionsError('Recent actions could not be loaded.');
     }
 
     setLoading(false);
     setRefreshing(false);
+    setRecentActionsLoading(false);
   }
 
   async function handleAction(action: ManualAction, order: AdminFulfillmentOrderRecord) {
@@ -108,7 +133,7 @@ export default function AdminFulfillmentScreen() {
       } else {
         setPageError(getResponseMessage(response) ?? 'Action failed.');
       }
-      await loadOrders('refresh');
+      await loadDashboardData('refresh');
     } catch {
       setPageError('Action failed.');
     } finally {
@@ -150,13 +175,13 @@ export default function AdminFulfillmentScreen() {
             ))}
           </View>
 
-          <Pressable
-            accessibilityRole="button"
-            disabled={loading || refreshing || actionLoading}
-            onPress={() => void loadOrders('refresh')}
-            style={({ pressed }) => [
-              styles.refreshButton,
-              pressed && !loading && !refreshing && !actionLoading && styles.refreshButtonPressed,
+            <Pressable
+              accessibilityRole="button"
+              disabled={loading || refreshing || actionLoading}
+              onPress={() => void loadDashboardData('refresh')}
+              style={({ pressed }) => [
+                styles.refreshButton,
+                pressed && !loading && !refreshing && !actionLoading && styles.refreshButtonPressed,
             ]}>
             {refreshing ? <ActivityIndicator color={Colors.light.primary} /> : <Text style={styles.refreshText}>Refresh</Text>}
           </Pressable>
@@ -258,6 +283,37 @@ export default function AdminFulfillmentScreen() {
           ) : (
             <Text style={styles.noticeText}>Run an action to inspect the returned JSON here.</Text>
           )}
+        </View>
+
+        <View style={styles.recentActionsCard}>
+          <View style={styles.resultHeader}>
+            <View>
+              <Text style={styles.sectionTitle}>Recent Actions</Text>
+              <Text style={styles.resultSubtitle}>Latest 20 audit rows</Text>
+            </View>
+            {recentActionsLoading ? <ActivityIndicator color={Colors.light.primary} /> : null}
+          </View>
+          {recentActionsError ? <Text style={styles.hintTextSecondary}>{recentActionsError}</Text> : null}
+          {recentActions.length === 0 && !recentActionsLoading ? (
+            <Text style={styles.noticeText}>No audit rows yet.</Text>
+          ) : null}
+          <View style={styles.recentActionsList}>
+            {recentActions.map((log) => (
+              <View key={log.id} style={styles.recentActionItem}>
+                <View style={styles.recentActionTopRow}>
+                  <Text style={styles.recentActionTime}>{formatCreatedAt(log.createdAt)}</Text>
+                  <StatusBadge label={log.ok === false ? 'Failed' : 'Ok'} tone={log.ok === false ? 'danger' : 'success'} />
+                </View>
+                <Text style={styles.recentActionMeta}>
+                  {log.adminEmail ?? 'Unknown admin'} · {log.action} · {shortOrderId(log.targetId)}
+                </Text>
+                <Text style={styles.recentActionMeta}>
+                  {formatAuditStatus(log.orderStatusBefore, log.supplierStatusBefore)} → {formatAuditStatus(log.orderStatusAfter, log.supplierStatusAfter)}
+                </Text>
+                {log.responseMessage ? <Text style={styles.recentActionMessage}>{log.responseMessage}</Text> : null}
+              </View>
+            ))}
+          </View>
         </View>
       </ScrollView>
 
@@ -482,6 +538,35 @@ function getSupplierHelperLine(order: AdminFulfillmentOrderRecord) {
   }
 
   return `Supplier status: ${order.supplierStatus ?? order.status}.`;
+}
+
+function formatAuditStatus(orderStatus: string | null, supplierStatus: string | null) {
+  const parts = [orderStatus ? formatOrderStatusLabel(orderStatus) : null, supplierStatus ? getSupplierStatusLabel(supplierStatus) : null].filter(
+    (part): part is string => Boolean(part),
+  );
+
+  return parts.length > 0 ? parts.join(' / ') : 'Unknown';
+}
+
+function formatOrderStatusLabel(value: string) {
+  if (value === 'paid') return 'Paid';
+  if (value === 'processing') return 'Processing';
+  if (value === 'completed') return 'Completed';
+  if (value === 'failed') return 'Failed';
+  if (value === 'cancelled') return 'Cancelled';
+  if (value === 'refunded') return 'Refunded';
+  if (value === 'pending_payment') return 'Pending Payment';
+  if (value === 'draft') return 'Draft';
+  return value;
+}
+
+function getSupplierStatusLabel(value: string) {
+  if (value === 'not_sent') return 'Not Sent';
+  if (value === 'pending') return 'Pending Supplier';
+  if (value === 'successful') return 'Successful';
+  if (value === 'failed') return 'Failed';
+  if (value === 'completed') return 'Completed';
+  return value;
 }
 
 function shortOrderId(orderId: string) {
@@ -900,6 +985,48 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     padding: Spacing.lg,
     gap: Spacing.md,
+  },
+  recentActionsCard: {
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: '#FFFFFF',
+    padding: Spacing.lg,
+    gap: Spacing.md,
+  },
+  recentActionsList: {
+    gap: Spacing.sm,
+  },
+  recentActionItem: {
+    gap: 4,
+    padding: Spacing.md,
+    borderRadius: Radius.lg,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  recentActionTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.sm,
+  },
+  recentActionTime: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: Colors.light.textSecondary,
+    fontWeight: '700',
+  },
+  recentActionMeta: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: Colors.light.textSecondary,
+    fontWeight: '600',
+  },
+  recentActionMessage: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: Colors.light.text,
   },
   resultHeader: {
     flexDirection: 'row',

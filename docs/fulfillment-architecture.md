@@ -135,9 +135,15 @@ The admin screen is manual-only:
 - it can run `dry_run`
 - it can run `live_manual`
 - it can run `check_status`
+- it writes a server-side audit row for each manual fulfillment action
+- it does not expose DT One credentials, admin secrets, or other sensitive values in logs
+- the current flow still does not automate Stripe webhook fulfillment
 
 It does not automate Stripe webhook fulfillment.
 Stripe webhook handling remains unchanged.
+
+Audit logging lives in `public.fulfillment_action_logs` and is written from the
+server-side admin wrapper with service-role access.
 
 ## Exact product linkage
 
