@@ -1,19 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { ChipSelector } from '@/components/ChipSelector';
 import { ResultCard } from '@/components/ResultCard';
-import { SectionCard } from '@/components/SectionCard';
-import { Colors, Spacing } from '@/constants/theme';
+import { Colors, Radius, Spacing } from '@/constants/theme';
 import { historyResults, lotteryStates } from '@/lib/mockData';
-import {
-  applyLotteryFilters,
-  fetchLotteryResults,
-  type LotteryResultsDateFilter,
-  type LotteryResultsFilters,
-} from '@/lib/publicData';
+import { applyLotteryFilters, fetchLotteryResults, type LotteryResultsDateFilter, type LotteryResultsFilters } from '@/lib/publicData';
 import { t, useLanguage } from '@/lib/i18n';
-import type { LotteryDraw, LotteryGame, LotteryState } from '@/lib/types';
+import type { LotteryDraw, LotteryGame, LotteryResult, LotteryState } from '@/lib/types';
 
 type DateFilter = LotteryResultsDateFilter;
 type GameFilter = LotteryGame | 'All';
@@ -26,252 +20,119 @@ export default function ResultsScreen() {
   const [stateFilter, setStateFilter] = useState<StateFilter>('All');
   const [gameFilter, setGameFilter] = useState<GameFilter>('All');
   const [drawFilter, setDrawFilter] = useState<DrawFilter>('All');
-  const [dateFilter, setDateFilter] = useState<DateFilter>('Any');
+  const [dateFilter] = useState<DateFilter>('Any');
   const [pickDate, setPickDate] = useState('');
   const [results, setResults] = useState<ReturnType<typeof applyLotteryFilters>>(
-    applyLotteryFilters(historyResults, {
-      state: 'All',
-      game: 'All',
-      draw: 'All',
-      date: 'Any',
-    })
+    applyLotteryFilters(historyResults, { state: 'All', game: 'All', draw: 'All', date: 'Any' })
   );
 
   useEffect(() => {
     let active = true;
-    const filters: LotteryResultsFilters = {
-      state: stateFilter,
-      game: gameFilter,
-      draw: drawFilter,
-      date: dateFilter,
-    };
+    const filters: LotteryResultsFilters = { state: stateFilter, game: gameFilter, draw: drawFilter, date: dateFilter };
 
     void fetchLotteryResults(filters).then((nextResults) => {
-      if (active) {
-        setResults(nextResults);
-      }
+      if (active) setResults(nextResults);
     });
 
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [dateFilter, drawFilter, gameFilter, stateFilter]);
 
   const visibleResults = useMemo(() => {
     const normalizedPickDate = pickDate.trim();
-    if (!normalizedPickDate) {
-      return results;
-    }
-
-    return results.filter((result) => result.date === normalizedPickDate);
+    return normalizedPickDate ? results.filter((result) => result.date === normalizedPickDate) : results;
   }, [pickDate, results]);
-
-  const analysis = useMemo(() => analyzeResults(visibleResults), [visibleResults]);
+  const groupedResults = useMemo(() => groupResultsByDraw(visibleResults), [visibleResults]);
 
   return (
-    <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-      <View style={styles.header}>
-        <Text style={styles.title}>{t('results')}</Text>
-        <Text style={styles.subtitle}>Pick a date, review the draw, and analyze the numbers.</Text>
-      </View>
+    <ScrollView contentContainerStyle={styles.page} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+      <View style={styles.content}>
+        <View style={styles.hero}>
+          <Text style={styles.title}>{t('results')}</Text>
+          <Text style={styles.subtitle}>Latest draw results in one place.</Text>
+        </View>
 
-      <SectionCard title="Pick date" subtitle="Filter by draw date or review a specific day">
-        <View style={styles.filterStack}>
-          <TextInput
-            value={pickDate}
-            onChangeText={setPickDate}
-            placeholder="YYYY-MM-DD"
-            placeholderTextColor={Colors.light.textTertiary}
-            style={styles.input}
-          />
-          <View style={styles.filterGroup}>
-            <Text style={styles.filterLabel}>{t('state')}</Text>
-            <ChipSelector
-              value={stateFilter}
-              options={['All', ...lotteryStates] as const}
-              onChange={setStateFilter}
-            />
+        <View style={styles.selectorSection}>
+          <Text style={styles.eyebrow}>Select state</Text>
+          <ScrollView horizontal contentContainerStyle={styles.stateRow} showsHorizontalScrollIndicator={false}>
+            {(['All', ...lotteryStates] as const).map((state) => {
+              const selected = stateFilter === state;
+              return (
+                <Pressable key={state} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => setStateFilter(state)} style={[styles.statePill, selected && styles.statePillSelected]}>
+                  <Text style={[styles.stateLabel, selected && styles.stateLabelSelected]}>{state}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+
+        <View style={styles.refineCard}>
+          <View style={styles.refineHeader}>
+            <Text style={styles.refineTitle}>Refine results</Text>
+            <Text style={styles.resultCount}>{visibleResults.length} {visibleResults.length === 1 ? 'result' : 'results'}</Text>
           </View>
+          <TextInput value={pickDate} onChangeText={setPickDate} placeholder="Draw date · YYYY-MM-DD" placeholderTextColor={Colors.light.textTertiary} style={styles.input} />
           <View style={styles.filterGroup}>
             <Text style={styles.filterLabel}>{t('game')}</Text>
-            <ChipSelector
-              value={gameFilter}
-              options={['All', 'Pick 3', 'Pick 4'] as const}
-              onChange={setGameFilter}
-            />
+            <ChipSelector value={gameFilter} options={['All', 'Pick 3', 'Pick 4'] as const} onChange={setGameFilter} />
           </View>
           <View style={styles.filterGroup}>
             <Text style={styles.filterLabel}>{t('draw')}</Text>
-            <ChipSelector
-              value={drawFilter}
-              options={['All', 'Midday', 'Evening'] as const}
-              onChange={setDrawFilter}
-            />
+            <ChipSelector value={drawFilter} options={['All', 'Midday', 'Evening'] as const} onChange={setDrawFilter} />
           </View>
         </View>
-      </SectionCard>
 
-      <SectionCard title="Draw results" subtitle={visibleResults.length ? `${visibleResults.length} result(s)` : 'No matching results'}>
-        {visibleResults.length ? (
+        {groupedResults.length ? (
           <View style={styles.list}>
-            {visibleResults.map((result) => (
-              <ResultCard key={result.id} result={result} />
-            ))}
+            {groupedResults.map((drawResults) => <ResultCard key={getDrawGroupKey(drawResults[0])} results={drawResults} />)}
           </View>
         ) : (
           <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>No results found</Text>
-            <Text style={styles.emptyBody}>Try a different date or relax one of the filters.</Text>
+            <View style={styles.emptyIndicator} />
+            <Text style={styles.emptyTitle}>Results not posted yet</Text>
+            <Text style={styles.emptyBody}>Check back after the draw.</Text>
           </View>
         )}
-      </SectionCard>
-
-      <SectionCard title="Analyze draw results" subtitle="Quick summary of the selected draw set">
-        <View style={styles.analysisGrid}>
-          <AnalysisTile label="Results" value={`${analysis.count}`} />
-          <AnalysisTile label="Latest date" value={analysis.latestDate} />
-          <AnalysisTile label="Repeated digits" value={`${analysis.repeatedDigits}`} />
-          <AnalysisTile label="Highest digit" value={analysis.highestDigit} />
-        </View>
-      </SectionCard>
+      </View>
     </ScrollView>
   );
 }
 
-function analyzeResults(results: ReturnType<typeof applyLotteryFilters>) {
-  let latestDate = '—';
-  let repeatedDigits = 0;
-  let highestDigit = '—';
-  let highestSeen = -1;
-
+function groupResultsByDraw(results: LotteryResult[]) {
+  const groups = new Map<string, LotteryResult[]>();
   results.forEach((result) => {
-    if (result.date > latestDate) {
-      latestDate = result.date;
-    }
-
-    const digits = result.winningNumbers;
-    if (new Set(digits).size < digits.length) {
-      repeatedDigits += 1;
-    }
-
-    digits.forEach((digit) => {
-      const numericDigit = Number(digit);
-      if (!Number.isNaN(numericDigit) && numericDigit > highestSeen) {
-        highestSeen = numericDigit;
-        highestDigit = digit;
-      }
-    });
+    const key = getDrawGroupKey(result);
+    groups.set(key, [...(groups.get(key) ?? []), result]);
   });
-
-  return {
-    count: results.length,
-    latestDate,
-    repeatedDigits,
-    highestDigit,
-  };
+  return Array.from(groups.values());
 }
 
-function AnalysisTile({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.analysisTile}>
-      <Text style={styles.analysisLabel}>{label}</Text>
-      <Text style={styles.analysisValue}>{value}</Text>
-    </View>
-  );
+function getDrawGroupKey(result: LotteryResult) {
+  return `${result.state}-${result.date}-${result.draw}`;
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flexGrow: 1,
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.lg,
-    paddingBottom: Spacing.xxl,
-    gap: Spacing.sm,
-    backgroundColor: Colors.light.background,
-  },
-  header: {
-    gap: 6,
-    paddingTop: Spacing.xs,
-    paddingBottom: Spacing.xs,
-  },
-  title: {
-    fontSize: 26,
-    lineHeight: 32,
-    fontWeight: '600',
-    color: Colors.light.text,
-  },
-  subtitle: {
-    fontSize: 15,
-    lineHeight: 22,
-    color: Colors.light.textSecondary,
-  },
-  filterStack: {
-    gap: Spacing.md,
-  },
-  filterGroup: {
-    gap: Spacing.xs,
-  },
-  filterLabel: {
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: '600',
-    color: Colors.light.text,
-  },
-  input: {
-    minHeight: 48,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    backgroundColor: Colors.light.surface,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 12,
-    fontSize: 15,
-    color: Colors.light.text,
-  },
-  list: {
-    gap: Spacing.md,
-  },
-  emptyState: {
-    paddingVertical: Spacing.md,
-    gap: 6,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    lineHeight: 24,
-    fontWeight: '600',
-    color: Colors.light.text,
-  },
-  emptyBody: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: Colors.light.textSecondary,
-  },
-  analysisGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.sm,
-  },
-  analysisTile: {
-    flexGrow: 1,
-    flexBasis: '48%',
-    padding: Spacing.md,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    backgroundColor: Colors.light.surface,
-    gap: 4,
-  },
-  analysisLabel: {
-    fontSize: 12,
-    lineHeight: 16,
-    color: Colors.light.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  analysisValue: {
-    fontSize: 16,
-    lineHeight: 22,
-    color: Colors.light.text,
-    fontWeight: '600',
-  },
+  page: { flexGrow: 1, backgroundColor: Colors.light.background, paddingHorizontal: Spacing.lg, paddingTop: Spacing.xl, paddingBottom: Spacing.xxl + Spacing.lg },
+  content: { width: '100%', maxWidth: 760, alignSelf: 'center', gap: Spacing.xl },
+  hero: { gap: 5 },
+  title: { fontSize: 30, lineHeight: 36, fontWeight: '700', letterSpacing: -0.5, color: Colors.light.text },
+  subtitle: { fontSize: 15, lineHeight: 22, color: Colors.light.textSecondary },
+  selectorSection: { gap: Spacing.sm },
+  eyebrow: { fontSize: 12, lineHeight: 16, fontWeight: '700', color: Colors.light.textSecondary, textTransform: 'uppercase', letterSpacing: 0.8 },
+  stateRow: { gap: Spacing.xs, paddingRight: Spacing.lg },
+  statePill: { minHeight: 42, borderRadius: 999, borderWidth: 1, borderColor: Colors.light.border, backgroundColor: Colors.light.surface, paddingHorizontal: Spacing.md, alignItems: 'center', justifyContent: 'center' },
+  statePillSelected: { borderColor: Colors.light.primary, backgroundColor: Colors.light.primary },
+  stateLabel: { fontSize: 14, lineHeight: 19, fontWeight: '600', color: Colors.light.textSecondary },
+  stateLabelSelected: { color: Colors.light.surface },
+  refineCard: { borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.light.border, backgroundColor: Colors.light.surface, padding: Spacing.lg, gap: Spacing.md },
+  refineHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.md },
+  refineTitle: { fontSize: 16, lineHeight: 22, fontWeight: '700', color: Colors.light.text },
+  resultCount: { fontSize: 13, lineHeight: 18, color: Colors.light.textSecondary },
+  input: { minHeight: 46, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.light.border, backgroundColor: Colors.light.surfaceMuted, paddingHorizontal: Spacing.md, paddingVertical: 11, fontSize: 14, color: Colors.light.text },
+  filterGroup: { gap: Spacing.xs },
+  filterLabel: { fontSize: 12, lineHeight: 16, fontWeight: '700', color: Colors.light.textSecondary, textTransform: 'uppercase', letterSpacing: 0.6 },
+  list: { gap: Spacing.md },
+  emptyState: { minHeight: 220, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.light.border, backgroundColor: Colors.light.surface, padding: Spacing.xl, alignItems: 'center', justifyContent: 'center', gap: 7 },
+  emptyIndicator: { width: 28, height: 3, borderRadius: 2, backgroundColor: Colors.light.gold, marginBottom: 5 },
+  emptyTitle: { fontSize: 18, lineHeight: 24, fontWeight: '700', color: Colors.light.text, textAlign: 'center' },
+  emptyBody: { fontSize: 14, lineHeight: 20, color: Colors.light.textSecondary, textAlign: 'center' },
 });
