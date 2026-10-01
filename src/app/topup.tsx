@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type ImageSourcePropType } from 'react-native';
 import { useRouter } from 'expo-router';
 
 import { ChipSelector } from '@/components/ChipSelector';
@@ -23,7 +23,7 @@ import type { Session } from '@supabase/supabase-js';
 import type { TopUpCarrier, TopUpProduct, UserMode } from '@/lib/types';
 
 type FlowMode = 'choose' | 'send' | 'request';
-type SendStep = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+type SendStep = 1 | 2 | 3 | 4 | 5 | 6;
 type RequestStep = 1 | 2 | 3 | 4 | 5;
 type SendProductType = 'airtime' | 'data';
 type PendingProfileAction = 'send' | 'request' | null;
@@ -325,9 +325,11 @@ export default function TopUpScreen() {
     }
   };
 
-  const startSendFlow = () => {
+  const startSendFlow = (productType: SendProductType) => {
     resetRequestFlow();
+    changeSendProductType(productType);
     setFlowMode('send');
+    setSendStep(2);
   };
 
   const startRequestFlow = () => {
@@ -454,7 +456,7 @@ export default function TopUpScreen() {
       ]
     : [];
 
-  const sendStepLabel = `STEP ${sendStep} OF 7`;
+  const sendStepLabel = `STEP ${Math.min(sendStep, 5)} OF 5`;
   const requestStepLabel = `REQUEST STEP ${requestStep} OF 5`;
 
   const confirmSendOrder = async (skipProfileCheck = false) => {
@@ -489,7 +491,7 @@ export default function TopUpScreen() {
 
       setSendOrder(nextOrder);
       setSendRecipientMessage(null);
-      setSendStep(7);
+      setSendStep(6);
 
       if (sendSaveRecipient) {
         await maybeSaveRecipient(
@@ -647,76 +649,83 @@ export default function TopUpScreen() {
       </Modal>
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
       <View style={styles.hero}>
-        <Text style={styles.title}>{t('sendAirtimeOrDataToHaiti')}</Text>
-        <Text style={styles.subtitle}>{t('lotteryResultsAndHaitiTopUp')}</Text>
+        <Text style={styles.title}>Top up Haiti</Text>
       </View>
 
       {flowMode === 'choose' ? (
-        <>
-          <SectionCard title={t('chooseEntryPath')} subtitle={t('chooseEntryPath')}>
-            <View style={styles.entryGrid}>
-              <FlowChoiceCard
-                eyebrow={t('sendAirtimeData')}
-                title={t('sendAirtimeOrDataToHaiti')}
-                body={t('sendAirtimeOrDataToHaiti')}
-                onPress={startSendFlow}
-              />
-              <FlowChoiceCard
-                eyebrow={t('requestDataFromFamily')}
-                title={t('requestData')}
-                body={t('requestDataFromFamily')}
-                onPress={startRequestFlow}
-              />
+        <View style={styles.flowStack}>
+          <ProgressIndicator step={1} />
+          <View style={styles.stepHeading}>
+            <Text style={styles.flowLabel}>STEP 1 OF 5</Text>
+            <Text style={styles.flowTitle}>What would you like to send?</Text>
+            <Text style={styles.flowSubtitle}>Choose a top up for someone in Haiti.</Text>
+          </View>
+          <View style={styles.entryGrid}>
+            <ProductTypeCard
+              title="Phone Credit"
+              body="Top up instantly"
+              image={require('../../assets/images/phone-credit-product.jpeg')}
+              onPress={() => startSendFlow('airtime')}
+            />
+            <ProductTypeCard
+              title="Data Bundle"
+              body="Social data packages"
+              image={require('../../assets/images/social-data-product.jpeg')}
+              onPress={() => startSendFlow('data')}
+            />
+          </View>
+          {productsLoading ? <Text style={styles.loadingText}>{t('loadingProducts')}</Text> : null}
+          <Pressable accessibilityRole="button" onPress={startRequestFlow} style={styles.requestEntry}>
+            <View style={styles.requestEntryCopy}>
+              <Text style={styles.requestEntryTitle}>{t('requestData')}</Text>
+              <Text style={styles.requestEntryBody}>{t('requestDataFromFamily')}</Text>
             </View>
-            {productsLoading ? <Text style={styles.loadingText}>{t('loadingProducts')}</Text> : null}
-          </SectionCard>
-
-          <SectionCard title={t('currentMode')} subtitle={modeSubtitle(userMode)}>
-            <Text style={styles.bodyText}>
-              {userMode === 'diaspora_supporter'
-                ? t('diasporaUserFocus')
-                : t('lotteryResultsAndHaitiTopUp')}
-            </Text>
-          </SectionCard>
-        </>
+            <Text style={styles.requestEntryArrow}>›</Text>
+          </Pressable>
+        </View>
       ) : flowMode === 'send' ? (
         <View style={styles.flowStack}>
+          <ProgressIndicator step={Math.min(sendStep, 5)} />
           <View style={styles.flowHeader}>
             <View style={styles.flowHeaderText}>
               <Text style={styles.flowLabel}>{sendStepLabel}</Text>
-              <Text style={styles.flowTitle}>{t('sendAirtimeData')}</Text>
-              <Text style={styles.flowSubtitle}>{t('sendAirtimeOrDataToHaiti')}</Text>
+              <Text style={styles.flowTitle}>
+                {sendStep === 2
+                  ? 'Choose a carrier'
+                  : sendStep === 3
+                    ? sendProductType === 'airtime' ? 'Choose your amount' : 'Choose your data bundle'
+                    : sendStep === 4
+                      ? 'Who are you sending this to?'
+                      : sendStep === 5 ? 'Review your top up' : 'Complete payment'}
+              </Text>
             </View>
-            <Pressable onPress={resetAllFlows} style={styles.changeFlowButton}>
-              <Text style={styles.changeFlowText}>{t('changeFlow')}</Text>
+            <Pressable onPress={() => sendStep === 2 ? resetAllFlows() : setSendStep((sendStep - 1) as SendStep)} style={styles.changeFlowButton}>
+              <Text style={styles.changeFlowText}>Back</Text>
             </Pressable>
           </View>
 
-          {sendStep === 1 ? (
-            <SectionCard title={t('chooseCarrier')} subtitle={t('chooseCarrier')}>
-              <View style={styles.sectionStack}>
-                <ChipSelector value={sendCarrier} options={carrierOptions} onChange={changeSendCarrier} />
-                <PrimaryButton label={t('continue')} onPress={() => setSendStep(2)} />
-              </View>
-            </SectionCard>
-          ) : null}
-
           {sendStep === 2 ? (
-            <SectionCard title={t('chooseAirtimeOrData')} subtitle={t('chooseAirtimeOrData')}>
-              <View style={styles.sectionStack}>
-                <ChipSelector
-                  value={sendProductType}
-                  options={sendProductTypeOptions}
-                  onChange={changeSendProductType}
-                  renderLabel={renderSendProductType}
-                />
-                <PrimaryButton label={t('continue')} onPress={() => setSendStep(3)} />
-              </View>
-            </SectionCard>
+            <View style={styles.carrierGrid}>
+              {carrierOptions.map((carrier) => (
+                <CarrierCard key={carrier} carrier={carrier} onPress={() => { changeSendCarrier(carrier); setSendStep(3); }} />
+              ))}
+            </View>
           ) : null}
 
           {sendStep === 3 ? (
-            <SectionCard title={t('enterHaitiPhoneNumber')} subtitle={t('enterHaitiPhoneNumber')}>
+            <View style={styles.sectionStack}>
+              <View style={styles.productGrid}>
+                {sendProducts.length ? sendProducts.map((product) => (
+                  <TopUpAmountCard key={product.id} product={product} selected={product.id === selectedSendProductId}
+                    onPress={() => { setSelectedSendProductId(product.id); setSendError(null); }} />
+                )) : <Text style={styles.emptyText}>{t('noResultsFound')}</Text>}
+              </View>
+              <PrimaryButton label={t('continue')} onPress={() => setSendStep(4)} disabled={!selectedSendProduct} />
+            </View>
+          ) : null}
+
+          {sendStep === 4 ? (
+            <View style={styles.premiumPanel}>
               <View style={styles.sectionStack}>
                 {isSignedIn ? (
                   <SavedRecipientsPicker
@@ -729,7 +738,7 @@ export default function TopUpScreen() {
                   />
                 ) : null}
                 <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>{t('recipientName')}</Text>
+                  <Text style={styles.inputLabel}>{t('recipientName')} (optional)</Text>
                   <TextInput
                     value={sendRecipientName}
                     onChangeText={(value) => {
@@ -744,19 +753,22 @@ export default function TopUpScreen() {
                 </View>
                 <View style={styles.inputGroup}>
                   <Text style={styles.inputLabel}>{t('phoneNumber')}</Text>
-                <TextInput
-                  value={sendPhoneNumber}
-                  onChangeText={(value) => {
-                    setSendPhoneNumber(value);
+                  <View style={styles.phoneInputRow}>
+                    <View style={styles.countryCode}><Text style={styles.countryCodeText}>+509</Text></View>
+                    <TextInput
+                      value={sendPhoneNumber}
+                      onChangeText={(value) => {
+                        setSendPhoneNumber(value);
                       setSendSelectedRecipientId(null);
-                    setSendError(null);
-                  }}
-                  placeholder="e.g. (509) 34-12-44-11"
-                  placeholderTextColor={Colors.light.muted}
-                  keyboardType="phone-pad"
-                  textContentType="telephoneNumber"
-                  style={styles.input}
-                />
+                        setSendError(null);
+                      }}
+                      placeholder="34 12 44 11"
+                      placeholderTextColor={Colors.light.muted}
+                      keyboardType="phone-pad"
+                      textContentType="telephoneNumber"
+                      style={[styles.input, styles.phoneInput]}
+                    />
+                  </View>
                 </View>
                 {isSignedIn ? (
                   <RecipientSaveToggle
@@ -768,81 +780,35 @@ export default function TopUpScreen() {
                 {sendRecipientMessage ? <Text style={styles.noteText}>{sendRecipientMessage}</Text> : null}
                 <PrimaryButton
                   label={t('continue')}
-                  onPress={() => setSendStep(4)}
+                  onPress={() => setSendStep(5)}
                   disabled={!sendPhoneNumber.trim()}
                 />
               </View>
-            </SectionCard>
-          ) : null}
-
-          {sendStep === 4 ? (
-            <SectionCard title={t('chooseAirtimeOrData')} subtitle={t('chooseAirtimeOrData')}>
-              <View style={styles.sectionStack}>
-                <View style={styles.productGrid}>
-                  {sendProducts.length ? (
-                    sendProducts.map((product) => (
-                      <TopUpAmountCard
-                        key={product.id}
-                        product={product}
-                        selected={product.id === selectedSendProductId}
-                        onPress={() => {
-                          setSelectedSendProductId(product.id);
-                          setSendError(null);
-                        }}
-                      />
-                    ))
-                  ) : (
-                    <Text style={styles.emptyText}>{t('noResultsFound')}</Text>
-                  )}
-                </View>
-                <PrimaryButton label={t('continue')} onPress={() => setSendStep(5)} disabled={!selectedSendProduct} />
-              </View>
-            </SectionCard>
+            </View>
           ) : null}
 
           {sendStep === 5 ? (
-            <SectionCard title={t('reviewRequest')} subtitle={t('reviewBeforePayment')}>
-              <View style={styles.sectionStack}>
-                <View style={styles.summaryCard}>
-                  {sendReviewSummary.map((row) => (
-                    <SummaryRow key={row.label} label={row.label} value={row.value} strong={row.strong} />
-                  ))}
-                </View>
-                <Text style={styles.noteText}>{t('reviewBeforePayment')}</Text>
-                <PrimaryButton label={t('continueToPayment')} onPress={() => setSendStep(6)} />
+            <View style={styles.sectionStack}>
+              <View style={styles.summaryCard}>
+                {sendReviewSummary.filter((row) => row.label !== t('orderType') && row.label !== t('recipientName')).map((row) => (
+                  <SummaryRow key={row.label} label={row.label} value={row.value} strong={row.strong} />
+                ))}
               </View>
-            </SectionCard>
+              {!isSignedIn ? (
+                <>
+                  <Text style={styles.warningText}>{t('signInRequiredBeforeTopUpOrder')}</Text>
+                  <PrimaryButton label={t('goToAccount')} onPress={() => router.push('/account')} />
+                </>
+              ) : (
+                <>
+                  {sendError ? <Text style={styles.errorText}>{sendError}</Text> : null}
+                  <PrimaryButton label="Continue to payment" onPress={confirmSendOrder} disabled={sendSubmitting || !selectedSendProduct} />
+                </>
+              )}
+            </View>
           ) : null}
 
           {sendStep === 6 ? (
-            <SectionCard title={t('completePayment')} subtitle={t('paySecurelyToCompleteOrder')}>
-              <View style={styles.sectionStack}>
-                <View style={styles.summaryCard}>
-                  {sendReviewSummary.map((row) => (
-                    <SummaryRow key={`payment-${row.label}`} label={row.label} value={row.value} strong={row.strong} />
-                  ))}
-                  <SummaryRow label={t('status')} value={t('pendingPayment')} />
-                </View>
-                {!isSignedIn ? (
-                  <>
-                    <Text style={styles.warningText}>{t('signInRequiredBeforeTopUpOrder')}</Text>
-                    <PrimaryButton label={t('goToAccount')} onPress={() => router.push('/account')} />
-                  </>
-                ) : (
-                  <>
-                    {sendError ? <Text style={styles.errorText}>{sendError}</Text> : null}
-                    <PrimaryButton
-                      label={t('continueToPayment')}
-                      onPress={confirmSendOrder}
-                      disabled={sendSubmitting || !selectedSendProduct}
-                    />
-                  </>
-                )}
-              </View>
-            </SectionCard>
-          ) : null}
-
-          {sendStep === 7 ? (
             <SectionCard title={t('completePayment')} subtitle={t('paySecurelyToCompleteOrder')}>
               <View style={styles.sectionStack}>
                 <Text style={styles.bodyText}>{t('onlinePaymentWillBeConnectedSoon')}</Text>
@@ -1034,23 +1000,49 @@ export default function TopUpScreen() {
   );
 }
 
-function FlowChoiceCard({
-  eyebrow,
+function ProductTypeCard({
   title,
   body,
+  image,
   onPress,
 }: {
-  eyebrow: string;
   title: string;
   body: string;
+  image: ImageSourcePropType;
   onPress: () => void;
 }) {
   return (
     <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.choiceCard, pressed && styles.choiceCardPressed]}>
-      <Text style={styles.choiceEyebrow}>{eyebrow}</Text>
-      <Text style={styles.choiceTitle}>{title}</Text>
-      <Text style={styles.choiceBody}>{body}</Text>
+      <Image source={image} style={styles.choiceImage} resizeMode="cover" />
+      <View style={styles.choiceCopy}>
+        <Text style={styles.choiceTitle}>{title}</Text>
+        <Text style={styles.choiceBody}>{body}</Text>
+      </View>
+      <View style={styles.choiceArrow}><Text style={styles.choiceArrowText}>›</Text></View>
     </Pressable>
+  );
+}
+
+function CarrierCard({ carrier, onPress }: { carrier: TopUpCarrier; onPress: () => void }) {
+  return (
+    <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.carrierCard, pressed && styles.choiceCardPressed]}>
+      <View style={[styles.carrierLogo, carrier === 'Digicel' ? styles.digicelLogo : styles.natcomLogo]}>
+        <Text style={styles.carrierLogoText}>{carrier.slice(0, 1)}</Text>
+      </View>
+      <View style={styles.choiceCopy}>
+        <Text style={styles.choiceTitle}>{carrier}</Text>
+        <Text style={styles.choiceBody}>Haiti mobile network</Text>
+      </View>
+      <View style={styles.choiceArrow}><Text style={styles.choiceArrowText}>›</Text></View>
+    </Pressable>
+  );
+}
+
+function ProgressIndicator({ step }: { step: number }) {
+  return (
+    <View accessibilityRole="progressbar" accessibilityValue={{ min: 1, max: 5, now: step }} style={styles.progressTrack}>
+      <View style={[styles.progressFill, { width: `${step * 20}%` }]} />
+    </View>
   );
 }
 
@@ -1231,26 +1223,31 @@ const styles = StyleSheet.create({
     color: Colors.light.textSecondary,
   },
   entryGrid: {
-    gap: Spacing.sm,
+    gap: Spacing.md,
   },
   choiceCard: {
-    padding: Spacing.lg,
+    minHeight: 112,
+    padding: Spacing.sm,
     borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.light.border,
-    backgroundColor: Colors.light.background,
-    gap: 6,
+    backgroundColor: Colors.light.surface,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
   },
   choiceCardPressed: {
     opacity: 0.92,
   },
-  choiceEyebrow: {
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '600',
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
-    color: Colors.light.textSecondary,
+  choiceImage: {
+    width: 88,
+    height: 88,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.light.surfaceAlt,
+  },
+  choiceCopy: {
+    flex: 1,
+    gap: 4,
   },
   choiceTitle: {
     fontSize: 18,
@@ -1263,8 +1260,68 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: Colors.light.textSecondary,
   },
+  choiceArrow: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.light.gold,
+  },
+  choiceArrowText: {
+    color: Colors.light.surface,
+    fontSize: 28,
+    lineHeight: 30,
+    fontWeight: '500',
+    marginTop: -2,
+  },
+  requestEntry: {
+    minHeight: 72,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  requestEntryCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  requestEntryTitle: {
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+    color: Colors.light.text,
+  },
+  requestEntryBody: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: Colors.light.textSecondary,
+  },
+  requestEntryArrow: {
+    fontSize: 26,
+    color: Colors.light.gold,
+  },
   flowStack: {
     gap: Spacing.md,
+  },
+  stepHeading: {
+    gap: 6,
+  },
+  progressTrack: {
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: Colors.light.border,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 2,
+    backgroundColor: Colors.light.gold,
   },
   flowHeader: {
     flexDirection: 'row',
@@ -1359,6 +1416,46 @@ const styles = StyleSheet.create({
   sectionStack: {
     gap: Spacing.sm,
   },
+  carrierGrid: {
+    gap: Spacing.md,
+  },
+  carrierCard: {
+    minHeight: 92,
+    padding: Spacing.md,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  carrierLogo: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  digicelLogo: {
+    backgroundColor: '#D9272E',
+  },
+  natcomLogo: {
+    backgroundColor: '#1769AA',
+  },
+  carrierLogoText: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: '800',
+  },
+  premiumPanel: {
+    padding: Spacing.md,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+  },
   inputGroup: {
     gap: 6,
   },
@@ -1379,18 +1476,41 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: Colors.light.text,
   },
+  phoneInputRow: {
+    flexDirection: 'row',
+    gap: Spacing.xs,
+  },
+  countryCode: {
+    minWidth: 72,
+    minHeight: 48,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surfaceAlt,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  countryCodeText: {
+    color: Colors.light.text,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  phoneInput: {
+    flex: 1,
+  },
   productGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: Spacing.sm,
   },
   summaryCard: {
-    padding: Spacing.md,
+    padding: Spacing.lg,
     borderRadius: Radius.lg,
     backgroundColor: Colors.light.surfaceAlt,
     borderWidth: 1,
     borderColor: Colors.light.border,
-    gap: Spacing.xs,
+    gap: Spacing.sm,
   },
   summaryRow: {
     flexDirection: 'row',
@@ -1412,7 +1532,10 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   summaryValueStrong: {
-    color: Colors.light.text,
+    color: Colors.light.primary,
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: '800',
   },
   savedRecipientsBlock: {
     gap: Spacing.xs,

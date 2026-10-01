@@ -4,18 +4,17 @@
     "slug": "boulio",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/branding/boulio-app-icon.png",
     "scheme": "boulio",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/images/branding/boulio-app-icon.png"
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "backgroundColor": "#080A0D",
+        "foregroundImage": "./assets/images/branding/boulio-adaptive-foreground.png",
+        "monochromeImage": "./assets/images/branding/boulio-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.luvme03.boulio"
@@ -29,9 +28,9 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "backgroundColor": "#F7F8FA",
+          "image": "./assets/images/branding/boulio-splash.png",
+          "imageWidth": 112
         }
       ],
       "expo-status-bar"
