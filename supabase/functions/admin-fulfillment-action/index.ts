@@ -30,8 +30,6 @@ type SupabaseUser = {
   email?: string | null;
 };
 
-type JwtPayload = Record<string, unknown>;
-
 type TopUpOrderRow = {
   id: string;
   created_at: string;
@@ -113,38 +111,12 @@ Deno.serve(async (req) => {
     const authorization = req.headers.get('authorization');
     const accessToken = getBearerToken(authorization);
     if (!accessToken) {
-      return jsonResponse(
-        500,
-        {
-          ok: false,
-          code: 'ADMIN_AUTH_USER_FAILED',
-          message: 'Could not verify admin user.',
-          stage: 'auth_user',
-          has_authorization_header: Boolean(authorization),
-          token_parts_count: 0,
-          payload_decoded: false,
-          has_sub: false,
-        },
-        corsHeaders,
-      );
+      return jsonResponse(403, ADMIN_ACCESS_DENIED, corsHeaders);
     }
 
     console.error('ADMIN_STAGE_AUTH_USER');
-    const authUserResult = decodeAdminJwt(accessToken);
-    if (!authUserResult.user) {
-      return jsonResponse(500, {
-        ok: false,
-        code: 'ADMIN_AUTH_USER_FAILED',
-        message: 'Could not verify admin user.',
-        stage: 'auth_user',
-        has_authorization_header: true,
-        token_parts_count: authUserResult.tokenPartsCount,
-        payload_decoded: authUserResult.payloadDecoded,
-        has_sub: authUserResult.hasSub,
-      }, corsHeaders);
-    }
-    const adminUser = authUserResult.user;
-    if (!isAdminAllowed(adminUser, adminEmails, adminUserIds)) {
+    const adminUser = await fetchAuthenticatedUser(baseUrl, serviceRoleKey, accessToken);
+    if (!adminUser || !isAdminAllowed(adminUser, adminEmails, adminUserIds)) {
       return jsonResponse(403, ADMIN_ACCESS_DENIED, corsHeaders);
     }
 
@@ -277,66 +249,33 @@ Deno.serve(async (req) => {
   }
 });
 
-function decodeAdminJwt(accessToken: string): {
-  user: SupabaseUser | null;
-  tokenPartsCount: number;
-  payloadDecoded: boolean;
-  hasSub: boolean;
-} {
+async function fetchAuthenticatedUser(
+  baseUrl: string,
+  serviceRoleKey: string,
+  accessToken: string,
+): Promise<SupabaseUser | null> {
   try {
-    const parts = accessToken.split('.');
-    const tokenPartsCount = parts.length;
-    if (tokenPartsCount !== 3) {
-      return {
-        user: null,
-        tokenPartsCount,
-        payloadDecoded: false,
-        hasSub: false,
-      };
+    const response = await fetch(`${baseUrl}/auth/v1/user`, {
+      headers: {
+        apikey: serviceRoleKey,
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+    if (!response.ok) {
+      return null;
     }
 
-    const payloadJson = base64UrlDecode(parts[1]);
-    const parsed = JSON.parse(payloadJson) as unknown;
-    if (!isPlainRecord(parsed)) {
-      return {
-        user: null,
-        tokenPartsCount,
-        payloadDecoded: false,
-        hasSub: false,
-      };
+    const user: unknown = await response.json();
+    if (!isPlainRecord(user) || typeof user.id !== 'string' || !user.id.trim()) {
+      return null;
     }
-
-    const hasSub = typeof parsed.sub === 'string' && parsed.sub.trim().length > 0;
-    if (!hasSub) {
-      return {
-        user: null,
-        tokenPartsCount,
-        payloadDecoded: true,
-        hasSub: false,
-      };
-    }
-
-    const email =
-      firstStringValue(parsed, ['email']) ??
-      firstStringFromNested(parsed, ['user_metadata', 'email']) ??
-      firstStringFromNested(parsed, ['app_metadata', 'email']);
 
     return {
-      user: {
-        id: parsed.sub.trim(),
-        email,
-      },
-      tokenPartsCount,
-      payloadDecoded: true,
-      hasSub: true,
+      id: user.id,
+      email: typeof user.email === 'string' ? user.email : null,
     };
   } catch {
-    return {
-      user: null,
-      tokenPartsCount: accessToken.split('.').length,
-      payloadDecoded: false,
-      hasSub: false,
-    };
+    return null;
   }
 }
 
@@ -351,12 +290,6 @@ function isAdminAllowed(adminUser: SupabaseUser, allowedEmails: string[], allowe
   }
 
   return false;
-}
-
-function base64UrlDecode(value: string) {
-  const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
-  const padding = '='.repeat((4 - (base64.length % 4)) % 4);
-  return atob(`${base64}${padding}`);
 }
 
 async function fetchRecentTopUpOrders(baseUrl: string, serviceRoleKey: string) {
@@ -580,22 +513,6 @@ function extractText(value: Record<string, unknown>, keys: string[]) {
   return null;
 }
 
-function firstStringValue(value: Record<string, unknown>, keys: string[]) {
-  for (const key of keys) {
-    const candidate = value[key];
-    if (typeof candidate === 'string' && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-
-  return null;
-}
-
-function firstStringFromNested(value: Record<string, unknown>, path: string[]) {
-  const candidate = getNestedValue(value, path);
-  return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
-}
-
 function getNestedValue(value: unknown, path: string[]): unknown {
   let current: unknown = value;
 
@@ -666,4 +583,43 @@ function jsonResponse(status: number, body: unknown, headers: Record<string, str
       ...JSON_HEADERS,
     },
   });
+}
+
+function normalizeText(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function parseJsonRecord(value: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isPlainRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function truncateSafe(value: string | null | undefined, maxLength: number) {
+  const text = value?.trim() ?? '';
+  if (!text) {
+    return null;
+  }
+
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength)}...`;
+}
+
+function getSafeErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return truncateSafe(error.message, 200) ?? 'Admin fulfillment action failed.';
+  }
+
+  if (typeof error === 'string' && error.trim()) {
+    return truncateSafe(error, 200) ?? 'Admin fulfillment action failed.';
+  }
+
+  return 'Admin fulfillment action failed.';
 }
