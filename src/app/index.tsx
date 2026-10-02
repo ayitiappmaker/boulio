@@ -1,162 +1,151 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { Colors, Radius, Spacing } from '@/constants/theme';
-import { latestResults } from '@/lib/mockData';
-import { fetchLatestLotteryResults } from '@/lib/publicData';
-import { t, useLanguage } from '@/lib/i18n';
-import { getStoredUserMode, subscribeToUserModeChanges } from '@/lib/userMode';
-import type { LotteryResult, UserMode } from '@/lib/types';
+import { Colors, Radius, SHADOW, Spacing } from '@/constants/theme';
 
-type ResultGroup = {
-  key: string;
-  state: LotteryResult['state'];
-  date: string;
-  results: LotteryResult[];
-};
+type ServiceKind = 'phone' | 'social' | 'request';
+
+const services: Array<{
+  kind: ServiceKind;
+  title: string;
+  description: string;
+  badge?: string;
+}> = [
+  {
+    kind: 'phone',
+    title: 'Phone Credit',
+    description: 'Top up Digicel or Natcom instantly.',
+    badge: 'From $5',
+  },
+  {
+    kind: 'social',
+    title: 'Social Data',
+    description: 'WhatsApp, TikTok, Facebook and more.',
+    badge: 'From $5',
+  },
+  {
+    kind: 'request',
+    title: 'Request Data',
+    description: 'Ask for a data bundle for yourself or someone else.',
+  },
+];
 
 export default function HomeScreen() {
   const router = useRouter();
-  useLanguage();
-
-  const [latestLotteryResults, setLatestLotteryResults] = useState<LotteryResult[]>(latestResults);
-  const [userMode, setUserMode] = useState<UserMode>(() => getStoredUserMode());
-
-  useEffect(() => {
-    let active = true;
-
-    void fetchLatestLotteryResults().then((results) => {
-      if (active) {
-        setLatestLotteryResults(results);
-      }
-    });
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    const unsubscribe = subscribeToUserModeChanges(setUserMode);
-    return unsubscribe;
-  }, []);
-
-  const recentResultGroups = useMemo(() => groupLatestResults(latestLotteryResults).slice(0, 3), [latestLotteryResults]);
 
   return (
     <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-      <View style={styles.quickActionsHeader}>
-        <Text style={styles.sectionTitle}>{t('quickActions')}</Text>
-      </View>
-      <View style={styles.quickActionList}>
-        <QuickActionCard
-          title={t('requestSocialData')}
-          subtitle={t('createLinkFamilyCanPay')}
-          onPress={() => router.push({ pathname: '/topup', params: { mode: 'request' } })}
-        />
-      </View>
-
-      <View style={styles.sectionHeaderRow}>
-        <Text style={styles.sectionTitle}>{t('latestResults')}</Text>
-        <PressableLabel label={t('viewAll')} onPress={() => router.push('/results')} />
+      <View style={styles.hero}>
+        <Text style={styles.headline}>Send data. Buy credit.{`\n`}Stay connected.</Text>
+        <Text style={styles.supportingCopy}>
+          Top up your phone, get data bundles, and stay close to what matters.
+        </Text>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => router.push('/topup')}
+          style={({ pressed }) => [styles.primaryAction, pressed && styles.primaryActionPressed]}>
+          <Text style={styles.primaryActionText}>Get started</Text>
+          <Text style={styles.primaryActionArrow}>→</Text>
+        </Pressable>
       </View>
 
-      <View style={styles.resultsList}>
-        {recentResultGroups.map((group, index) => (
-          <GroupedResultRow key={group.key} group={group} isLast={index === recentResultGroups.length - 1} />
+      <View style={styles.serviceList}>
+        {services.map((service) => (
+          <ServiceCard
+            key={service.title}
+            {...service}
+            onPress={() => router.push(service.kind === 'request'
+              ? { pathname: '/topup', params: { mode: 'request' } }
+              : '/topup')}
+          />
         ))}
       </View>
+
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => router.push('/results')}
+        style={({ pressed }) => [styles.drawCard, pressed && styles.pressed]}>
+        <View style={styles.drawIconWell}>
+          <Text style={styles.drawIcon}>★</Text>
+        </View>
+        <View style={styles.drawText}>
+          <Text style={styles.drawTitle}>Upcoming Draw</Text>
+          <Text style={styles.drawCopy}>Check the latest results when posted.</Text>
+        </View>
+        <ChevronButton />
+      </Pressable>
     </ScrollView>
   );
 }
 
-function PressableLabel({ label, onPress }: { label: string; onPress: () => void }) {
-  return (
-    <Pressable accessibilityRole="button" onPress={onPress}>
-      <Text style={styles.sectionAction}>
-        {label} →
-      </Text>
-    </Pressable>
-  );
-}
-
-function QuickActionCard({
+function ServiceCard({
+  kind,
   title,
-  subtitle,
+  description,
+  badge,
   onPress,
 }: {
+  kind: ServiceKind;
   title: string;
-  subtitle: string;
+  description: string;
+  badge?: string;
   onPress: () => void;
 }) {
   return (
-    <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.quickActionCard, pressed && styles.pressed]}>
-      <View style={styles.quickActionText}>
-        <Text style={styles.quickActionTitle}>{title}</Text>
-        <Text style={styles.quickActionSubtitle}>{subtitle}</Text>
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [styles.serviceCard, pressed && styles.pressed]}>
+      <ServiceIcon kind={kind} />
+      <View style={styles.serviceText}>
+        <Text style={styles.serviceTitle}>{title}</Text>
+        <Text style={styles.serviceDescription}>{description}</Text>
+        {badge ? (
+          <View style={styles.badge}>
+            <Text style={styles.badgeText}>{badge}</Text>
+          </View>
+        ) : null}
       </View>
-      <Text style={styles.quickActionArrow}>→</Text>
+      <ChevronButton />
     </Pressable>
   );
 }
 
-function groupLatestResults(results: LotteryResult[]): ResultGroup[] {
-  const grouped = new Map<string, ResultGroup>();
-
-  results.forEach((result) => {
-    const key = `${result.state}-${result.date}`;
-    const existing = grouped.get(key);
-
-    if (existing) {
-      existing.results.push(result);
-      return;
-    }
-
-    grouped.set(key, {
-      key,
-      state: result.state,
-      date: result.date,
-      results: [result],
-    });
-  });
-
-  return Array.from(grouped.values())
-    .map((group) => ({
-      ...group,
-      results: group.results.slice().sort((a, b) => a.game.localeCompare(b.game) || a.draw.localeCompare(b.draw)),
-    }))
-    .sort((a, b) => b.date.localeCompare(a.date) || a.state.localeCompare(b.state));
+function ServiceIcon({ kind }: { kind: ServiceKind }) {
+  return (
+    <View style={styles.iconWell}>
+      {kind === 'phone' ? (
+        <View style={styles.phoneIcon}>
+          <View style={styles.phoneSpeaker} />
+          <View style={styles.phoneButton} />
+        </View>
+      ) : null}
+      {kind === 'social' ? (
+        <View style={styles.signalIcon}>
+          <View style={[styles.signalBar, styles.signalBarOne]} />
+          <View style={[styles.signalBar, styles.signalBarTwo]} />
+          <View style={[styles.signalBar, styles.signalBarThree]} />
+          <View style={[styles.signalBar, styles.signalBarFour]} />
+        </View>
+      ) : null}
+      {kind === 'request' ? (
+        <View style={styles.documentIcon}>
+          <View style={styles.documentLineShort} />
+          <View style={styles.documentLine} />
+          <View style={styles.documentLine} />
+        </View>
+      ) : null}
+      <View style={styles.iconBadge}>
+        <Text style={styles.iconBadgeText}>{kind === 'phone' ? '$' : kind === 'social' ? '●' : '↑'}</Text>
+      </View>
+    </View>
+  );
 }
 
-function GroupedResultRow({ group, isLast }: { group: ResultGroup; isLast: boolean }) {
+function ChevronButton() {
   return (
-    <View style={[styles.resultGroup, isLast && styles.resultGroupLast]}>
-      <View style={styles.resultGroupHeader}>
-        <View style={styles.resultGroupMeta}>
-          <Text style={styles.resultState}>{group.state}</Text>
-          <Text style={styles.resultDate}>{group.date}</Text>
-        </View>
-        <Text style={styles.resultGroupCount}>{group.results.length} draw(s)</Text>
-      </View>
-      <View style={styles.groupRows}>
-        {group.results.map((result, index) => (
-          <View key={result.id} style={[styles.groupRow, index === 0 && styles.groupRowFirst]}>
-            <View style={styles.groupRowMeta}>
-              <Text style={styles.resultInfo}>
-                {result.game} {result.draw}
-              </Text>
-            </View>
-            <View style={styles.numberRow}>
-              {result.winningNumbers.map((number) => (
-                <View key={number} style={styles.numberPill}>
-                  <Text style={styles.numberText}>{number}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-        ))}
-      </View>
+    <View style={styles.chevronButton}>
+      <Text style={styles.chevron}>›</Text>
     </View>
   );
 }
@@ -165,152 +154,174 @@ const styles = StyleSheet.create({
   container: {
     flexGrow: 1,
     paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.md,
-    paddingBottom: Spacing.xxl,
-    gap: Spacing.md,
+    paddingTop: Spacing.xl,
+    paddingBottom: Spacing.xl,
+    gap: Spacing.xl,
     backgroundColor: Colors.light.background,
   },
-  quickActionsHeader: {
-    paddingTop: 2,
-  },
-  quickActionList: {
-    borderTopWidth: 1,
-    borderTopColor: Colors.light.border,
-  },
-  quickActionCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+  hero: {
     gap: Spacing.md,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
   },
-  quickActionText: {
-    flex: 1,
-    gap: 2,
-  },
-  quickActionTitle: {
-    fontSize: 16,
-    lineHeight: 21,
-    fontWeight: '600',
+  headline: {
+    maxWidth: 370,
+    fontSize: 38,
+    lineHeight: 44,
+    fontWeight: '800',
+    letterSpacing: -1.25,
     color: Colors.light.text,
   },
-  quickActionSubtitle: {
-    fontSize: 13,
-    lineHeight: 18,
+  supportingCopy: {
+    maxWidth: 350,
+    fontSize: 16,
+    lineHeight: 24,
     color: Colors.light.textSecondary,
   },
-  quickActionArrow: {
-    fontSize: 16,
-    lineHeight: 16,
-    color: Colors.light.primary,
-    fontWeight: '600',
-  },
-  sectionHeaderRow: {
+  primaryAction: {
+    minHeight: 58,
+    width: '100%',
+    marginTop: Spacing.xs,
+    borderRadius: Radius.xl,
+    paddingHorizontal: Spacing.xl,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: Spacing.xs,
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.light.primary,
   },
-  sectionTitle: {
+  primaryActionPressed: {
+    backgroundColor: Colors.light.primaryPressed,
+  },
+  primaryActionText: {
     fontSize: 17,
     lineHeight: 22,
-    fontWeight: '600',
-    color: Colors.light.text,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
-  sectionAction: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: Colors.light.primary,
-    fontWeight: '500',
+  primaryActionArrow: {
+    fontSize: 25,
+    lineHeight: 26,
+    color: Colors.light.gold,
   },
-  resultsList: {
-    borderTopWidth: 1,
-    borderTopColor: Colors.light.border,
+  serviceList: {
+    gap: Spacing.md,
   },
-  resultGroup: {
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
-    gap: 10,
-  },
-  resultGroupLast: {
-    borderBottomWidth: 0,
-  },
-  resultGroupHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: Spacing.sm,
-  },
-  resultGroupMeta: {
-    flex: 1,
-    gap: 2,
-  },
-  resultGroupCount: {
-    fontSize: 12,
-    lineHeight: 16,
-    color: Colors.light.textTertiary,
-    fontWeight: '500',
-  },
-  groupRows: {
-    gap: 4,
-  },
-  groupRow: {
+  serviceCard: {
+    minHeight: 132,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: Spacing.sm,
-    paddingTop: 4,
-  },
-  groupRowFirst: {
-    paddingTop: 0,
-  },
-  groupRowMeta: {
-    minWidth: 100,
-  },
-  resultState: {
-    fontSize: 15,
-    lineHeight: 20,
-    color: Colors.light.text,
-    fontWeight: '500',
-  },
-  resultInfo: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: Colors.light.textSecondary,
-  },
-  resultDate: {
-    fontSize: 12,
-    lineHeight: 16,
-    color: Colors.light.textSecondary,
-  },
-  numberRow: {
-    flexDirection: 'row',
-    gap: 6,
-    flexWrap: 'wrap',
-    justifyContent: 'flex-end',
-    maxWidth: '56%',
-  },
-  numberPill: {
-    minWidth: 26,
-    height: 26,
-    paddingHorizontal: 7,
-    borderRadius: 999,
+    gap: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.md,
+    borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.light.border,
     backgroundColor: Colors.light.surface,
+    ...SHADOW,
+  },
+  iconWell: {
+    width: 82,
+    height: 82,
+    borderRadius: 41,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: '#F3F5F8',
   },
-  numberText: {
-    fontSize: 12,
-    lineHeight: 14,
-    color: Colors.light.text,
-    fontWeight: '600',
+  phoneIcon: {
+    width: 28,
+    height: 46,
+    borderRadius: 6,
+    borderWidth: 3,
+    borderColor: Colors.light.primary,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 5,
   },
-  pressed: {
-    opacity: 0.8,
+  phoneSpeaker: { width: 8, height: 2, borderRadius: 1, backgroundColor: Colors.light.primary },
+  phoneButton: { width: 7, height: 3, borderRadius: 2, backgroundColor: Colors.light.primary },
+  signalIcon: {
+    height: 48,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 5,
   },
+  signalBar: { width: 7, borderRadius: 4, backgroundColor: Colors.light.primary },
+  signalBarOne: { height: 17 },
+  signalBarTwo: { height: 27 },
+  signalBarThree: { height: 38 },
+  signalBarFour: { height: 48 },
+  documentIcon: {
+    width: 34,
+    height: 46,
+    borderRadius: 5,
+    borderWidth: 3,
+    borderColor: Colors.light.primary,
+    padding: 6,
+    gap: 6,
+  },
+  documentLineShort: { width: 9, height: 3, borderRadius: 2, backgroundColor: Colors.light.primary },
+  documentLine: { width: 17, height: 3, borderRadius: 2, backgroundColor: Colors.light.primary },
+  iconBadge: {
+    position: 'absolute',
+    right: 2,
+    bottom: 3,
+    width: 29,
+    height: 29,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.light.gold,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
+  iconBadgeText: { fontSize: 16, lineHeight: 18, fontWeight: '700', color: '#FFFFFF' },
+  serviceText: {
+    flex: 1,
+    alignSelf: 'stretch',
+    justifyContent: 'center',
+    gap: 5,
+  },
+  serviceTitle: { fontSize: 18, lineHeight: 23, fontWeight: '700', color: Colors.light.text },
+  serviceDescription: { fontSize: 14, lineHeight: 20, color: Colors.light.textSecondary },
+  badge: {
+    alignSelf: 'flex-start',
+    marginTop: 2,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: '#FBF5E9',
+  },
+  badgeText: { fontSize: 13, lineHeight: 16, fontWeight: '600', color: '#9A6815' },
+  chevronButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FBF6EC',
+  },
+  chevron: { marginTop: -2, fontSize: 28, lineHeight: 30, fontWeight: '500', color: '#B77A12' },
+  drawCard: {
+    minHeight: 96,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    padding: Spacing.md,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: '#E8D6B4',
+    backgroundColor: '#FFFCF7',
+  },
+  drawIconWell: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F8F3EA',
+  },
+  drawIcon: { fontSize: 25, color: Colors.light.gold },
+  drawText: { flex: 1, gap: 4 },
+  drawTitle: { fontSize: 17, lineHeight: 22, fontWeight: '700', color: Colors.light.text },
+  drawCopy: { fontSize: 13, lineHeight: 19, color: Colors.light.textSecondary },
+  pressed: { opacity: 0.72 },
 });

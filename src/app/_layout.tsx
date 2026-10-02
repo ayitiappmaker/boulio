@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, View, type ColorValue } from 'react-native';
 import { Tabs, usePathname, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -55,7 +55,13 @@ export default function RootLayout() {
             onPress={() => setLanguagePickerOpen(true)}
             style={styles.languageButton}>
             <Text style={styles.languageText}>{currentLanguage.label}</Text>
+            <Text style={styles.languageChevron}>⌄</Text>
           </Pressable>
+          <Image
+            accessibilityLabel="Boulio"
+            source={require('../../assets/images/branding/boulio-header-logo.png')}
+            style={styles.brandLogo}
+          />
           <Pressable accessibilityRole="button" onPress={() => router.push(accountTarget)} style={styles.accountButton}>
             <Text style={styles.accountText}>{session ? t('account') : t('signIn')}</Text>
           </Pressable>
@@ -64,7 +70,7 @@ export default function RootLayout() {
         <Tabs
           screenOptions={{
             headerShown: false,
-            tabBarActiveTintColor: Colors.light.primary,
+            tabBarActiveTintColor: Colors.light.text,
             tabBarInactiveTintColor: Colors.light.muted,
             tabBarShowLabel: true,
             tabBarLabelStyle: {
@@ -86,7 +92,7 @@ export default function RootLayout() {
             },
             tabBarStyle: {
               position: 'relative',
-              height: 72 + insets.bottom,
+              height: 64 + insets.bottom,
               borderRadius: 0,
               backgroundColor: Colors.light.surface,
               borderTopColor: Colors.light.border,
@@ -94,8 +100,7 @@ export default function RootLayout() {
               shadowOpacity: 0,
               elevation: 0,
               paddingHorizontal: 0,
-              paddingBottom: Math.max(insets.bottom, 12),
-              marginBottom: Math.max(insets.bottom, 12),
+              paddingBottom: Math.max(insets.bottom, 8),
               display: hideTabs ? 'none' : 'flex',
             },
           }}>
@@ -103,21 +108,21 @@ export default function RootLayout() {
             name="index"
             options={{
               title: t('home'),
-              tabBarIcon: ({ color }) => <Text style={[styles.tabIcon, { color }]}>⌂</Text>,
+              tabBarIcon: ({ color, focused }) => <TabIcon glyph="⌂" color={color} focused={focused} />,
             }}
           />
           <Tabs.Screen
             name="results"
             options={{
               title: t('results'),
-              tabBarIcon: ({ color }) => <Text style={[styles.tabIcon, { color }]}>◫</Text>,
+              tabBarIcon: ({ color, focused }) => <TabIcon glyph="▥" color={color} focused={focused} />,
             }}
           />
           <Tabs.Screen
             name="topup"
             options={{
               title: t('topup'),
-              tabBarIcon: ({ color }) => <Text style={[styles.tabIcon, { color }]}>＋</Text>,
+              tabBarIcon: ({ color, focused }) => <TabIcon glyph="＋" color={color} focused={focused} />,
             }}
           />
           <Tabs.Screen name="admin/fulfillment" options={{ href: null }} />
@@ -170,24 +175,37 @@ export default function RootLayout() {
   );
 }
 
+function TabIcon({ glyph, color, focused }: { glyph: string; color: ColorValue; focused: boolean }) {
+  return (
+    <View style={styles.tabIconWrap}>
+      <Text style={[styles.tabIcon, { color }]}>{glyph}</Text>
+      {focused ? <View style={styles.activeTabIndicator} /> : null}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   shell: {
     flex: 1,
     backgroundColor: Colors.light.background,
   },
   header: {
+    position: 'relative',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: Spacing.lg,
-    paddingBottom: 10,
+    paddingBottom: 12,
     backgroundColor: Colors.light.surface,
     borderBottomWidth: 1,
     borderBottomColor: Colors.light.border,
   },
   languageButton: {
+    minWidth: 96,
     minHeight: 40,
     paddingHorizontal: 0,
+    flexDirection: 'row',
+    gap: 6,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -198,7 +216,15 @@ const styles = StyleSheet.create({
     color: Colors.light.text,
     letterSpacing: 0.3,
   },
+  languageChevron: {
+    marginTop: -3,
+    fontSize: 17,
+    lineHeight: 20,
+    fontWeight: '700',
+    color: Colors.light.text,
+  },
   accountButton: {
+    minWidth: 96,
     minHeight: 40,
     paddingHorizontal: 0,
     alignItems: 'center',
@@ -210,11 +236,33 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: Colors.light.text,
   },
+  brandLogo: {
+    position: 'absolute',
+    left: '50%',
+    bottom: 10,
+    width: 42,
+    height: 42,
+    marginLeft: -21,
+    borderRadius: 12,
+  },
   tabIcon: {
     fontSize: 20,
     lineHeight: 20,
     fontWeight: '600',
     textAlign: 'center',
+  },
+  tabIconWrap: {
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  activeTabIndicator: {
+    position: 'absolute',
+    bottom: -28,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Colors.light.gold,
   },
   modalBackdrop: {
     flex: 1,

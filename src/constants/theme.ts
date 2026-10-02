@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 
 const premiumLight = {
-  background: '#FFFFFF',
+  background: '#F7F8FA',
   surface: '#FFFFFF',
   surfaceMuted: '#F8FAFC',
   surfaceAlt: '#F8FAFC',
@@ -9,8 +9,8 @@ const premiumLight = {
   textPrimary: '#111827',
   textSecondary: '#6B7280',
   textTertiary: '#9CA3AF',
-  primary: '#2563EB',
-  primaryPressed: '#1D4ED8',
+  primary: '#0D1726',
+  primaryPressed: '#1B2A40',
   success: '#16A34A',
   danger: '#DC2626',
   warning: '#F59E0B',
@@ -42,7 +42,8 @@ export const Colors = {
     text: premiumLight.textPrimary,
     muted: premiumLight.textSecondary,
     primary: premiumLight.primary,
-    primarySoft: '#EFF6FF',
+    primarySoft: '#EEF1F5',
+    gold: '#B7924A',
     accentRed: premiumLight.danger,
     accentBlue: premiumLight.primary,
     success: premiumLight.success,

@@ -730,6 +730,7 @@ export default function TopUpScreen() {
         </View>
 
         <View style={styles.flowStack}>
+          <ProgressIndicator step={sendStep} />
           <View style={styles.flowHeader}>
             <View style={styles.flowHeaderText}>
               <Text style={styles.flowLabel}>{sendStepLabel}</Text>
@@ -1090,6 +1091,14 @@ function FlowChoiceCard({
   );
 }
 
+function ProgressIndicator({ step }: { step: number }) {
+  return (
+    <View accessibilityRole="progressbar" accessibilityValue={{ min: 1, max: 3, now: step }} style={styles.progressTrack}>
+      <View style={[styles.progressFill, { width: `${(step / 3) * 100}%` }]} />
+    </View>
+  );
+}
+
 function SavedRecipientsPicker({
   title,
   subtitle,
@@ -1405,6 +1414,17 @@ const styles = StyleSheet.create({
   flowStack: {
     gap: Spacing.md,
   },
+  progressTrack: {
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: Colors.light.border,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 2,
+    backgroundColor: Colors.light.gold,
+  },
   flowHeader: {
     flexDirection: 'row',
     gap: Spacing.md,
@@ -1543,12 +1563,12 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
   },
   summaryCard: {
-    padding: Spacing.md,
+    padding: Spacing.lg,
     borderRadius: Radius.lg,
     backgroundColor: Colors.light.surfaceAlt,
     borderWidth: 1,
     borderColor: Colors.light.border,
-    gap: Spacing.xs,
+    gap: Spacing.sm,
   },
   summaryRow: {
     flexDirection: 'row',
@@ -1570,7 +1590,10 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   summaryValueStrong: {
-    color: Colors.light.text,
+    color: Colors.light.primary,
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: '800',
   },
   savedRecipientsBlock: {
     gap: Spacing.xs,

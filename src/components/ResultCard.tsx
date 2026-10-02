@@ -1,28 +1,44 @@
 import { StyleSheet, Text, View } from 'react-native';
 
-import { Colors, Radius, Spacing } from '@/constants/theme';
+import { Colors, Radius, SHADOW, Spacing } from '@/constants/theme';
 import type { LotteryResult } from '@/lib/types';
 
 type ResultCardProps = {
-  result: LotteryResult;
+  results: LotteryResult[];
 };
 
-export function ResultCard({ result }: ResultCardProps) {
+export function ResultCard({ results }: ResultCardProps) {
+  const [firstResult] = results;
+
+  if (!firstResult) {
+    return null;
+  }
+
   return (
     <View style={styles.card}>
-      <View style={styles.metaRow}>
-        <Text style={styles.state}>{result.state}</Text>
-        <Text style={styles.meta}>
-          {result.game} - {result.draw}
-        </Text>
+      <View style={styles.header}>
+        <View style={styles.headerCopy}>
+          <Text style={styles.state}>{firstResult.state}</Text>
+          <View style={styles.metaRow}>
+            <View style={styles.dateAccent} />
+            <Text style={styles.meta}>
+              {firstResult.date} · {firstResult.draw}
+            </Text>
+          </View>
+        </View>
       </View>
 
-      <Text style={styles.date}>{result.date}</Text>
-
-      <View style={styles.numberRow}>
-        {result.winningNumbers.map((number) => (
-          <View key={number} style={styles.numberPill}>
-            <Text style={styles.number}>{number}</Text>
+      <View style={styles.games}>
+        {results.map((result, index) => (
+          <View key={result.id} style={[styles.gameBlock, index > 0 && styles.gameBlockDivided]}>
+            <Text style={styles.game}>{result.game}</Text>
+            <View style={styles.numberRow}>
+              {result.winningNumbers.map((number, numberIndex) => (
+                <View key={`${result.id}-${numberIndex}`} style={styles.numberBall}>
+                  <Text style={styles.number}>{number}</Text>
+                </View>
+              ))}
+            </View>
           </View>
         ))}
       </View>
@@ -31,52 +47,18 @@ export function ResultCard({ result }: ResultCardProps) {
 }
 
 const styles = StyleSheet.create({
-  card: {
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    backgroundColor: Colors.light.surface,
-    padding: Spacing.md,
-    gap: Spacing.sm,
-  },
-  metaRow: {
-    gap: 2,
-  },
-  state: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: Colors.light.text,
-  },
-  meta: {
-    fontSize: 13,
-    color: Colors.light.textSecondary,
-  },
-  date: {
-    fontSize: 13,
-    color: Colors.light.textTertiary,
-  },
-  numberRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 2,
-  },
-  numberPill: {
-    minWidth: 42,
-    minHeight: 42,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderRadius: Radius.md,
-    backgroundColor: Colors.light.surfaceMuted,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  number: {
-    fontSize: 18,
-    lineHeight: 22,
-    fontWeight: '600',
-    color: Colors.light.text,
-  },
+  card: { borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.light.border, backgroundColor: Colors.light.surface, padding: Spacing.lg, gap: Spacing.lg, ...SHADOW },
+  header: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: Spacing.md },
+  headerCopy: { flex: 1, gap: 7 },
+  state: { fontSize: 20, lineHeight: 26, fontWeight: '700', color: Colors.light.text },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  dateAccent: { width: 5, height: 5, borderRadius: 3, backgroundColor: Colors.light.gold },
+  meta: { fontSize: 13, lineHeight: 18, color: Colors.light.textSecondary },
+  games: { gap: Spacing.lg },
+  gameBlock: { gap: Spacing.sm },
+  gameBlockDivided: { borderTopWidth: 1, borderTopColor: Colors.light.border, paddingTop: Spacing.lg },
+  game: { fontSize: 14, lineHeight: 20, fontWeight: '700', color: Colors.light.text },
+  numberRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  numberBall: { width: 48, height: 48, borderRadius: 24, backgroundColor: Colors.light.surfaceMuted, borderWidth: 1, borderColor: Colors.light.border, alignItems: 'center', justifyContent: 'center' },
+  number: { fontSize: 20, lineHeight: 24, fontWeight: '700', color: Colors.light.text },
 });

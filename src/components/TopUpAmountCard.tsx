@@ -2,10 +2,8 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Radius, Spacing } from '@/constants/theme';
 import { t } from '@/lib/i18n';
+import { getRecipientReceivesLabel } from '@/lib/topupProductDisplay';
 import type { TopUpProduct } from '@/lib/types';
-import {
-  getRecipientReceivesLabel,
-} from '@/lib/topupProductDisplay';
 
 type TopUpAmountCardProps = {
   product: TopUpProduct;
@@ -13,11 +11,13 @@ type TopUpAmountCardProps = {
   onPress: () => void;
 };
 
-export function TopUpAmountCard({ product, selected, onPress }: TopUpAmountCardProps) {
+export function TopUpAmountCard({
+  product,
+  selected,
+  onPress,
+}: TopUpAmountCardProps) {
   const isAirtime = product.productType === 'airtime';
-  const amountLabel = formatCurrency(product.price);
-  const serviceFeeLabel = formatCurrency(product.serviceFee);
-  const totalLabel = formatCurrency(product.totalUsd);
+  const total = product.totalUsd;
   const recipientReceivesLabel = isAirtime ? null : getRecipientReceivesLabel(product);
   const bundleHelpfulLine = isAirtime ? null : getBundleHelpfulLine(product);
 
@@ -27,29 +27,53 @@ export function TopUpAmountCard({ product, selected, onPress }: TopUpAmountCardP
       onPress={onPress}
       style={({ pressed }) => [
         styles.card,
-        isAirtime ? styles.airtimeCard : styles.bundleCard,
+        !isAirtime && styles.bundleCard,
         selected && styles.selectedCard,
         pressed && styles.pressedCard,
       ]}>
-      {isAirtime ? (
-        <View style={styles.airtimeContent}>
-          <Text style={styles.airtimeAmount}>{amountLabel}</Text>
-          <Text style={styles.airtimeMeta}>{`Fee ${serviceFeeLabel}`}</Text>
-          <Text style={styles.airtimeTotal}>{`Total ${totalLabel}`}</Text>
+      <View style={styles.visualRow}>
+        <View style={[styles.carrierMark, selected && styles.selectedCarrierMark]}>
+          <Text style={[styles.carrierMarkText, selected && styles.selectedText]}>
+            {product.carrier === 'Digicel' ? 'D' : 'N'}
+          </Text>
         </View>
-      ) : (
-        <View style={styles.bundleContent}>
-          <Text style={styles.bundleCarrier}>{product.carrier}</Text>
-          <Text style={styles.bundleName}>{product.name}</Text>
-          <Text style={styles.bundleMeta}>{t('socialData')}</Text>
-          {recipientReceivesLabel ? (
-            <Text style={styles.recipientReceives}>{`Recipient receives: ${recipientReceivesLabel}`}</Text>
-          ) : null}
-          {bundleHelpfulLine ? <Text style={styles.bundleDetail}>{bundleHelpfulLine}</Text> : null}
-          <Text style={styles.paymentBreakdown}>{`You pay: ${amountLabel} + ${serviceFeeLabel} fee`}</Text>
-          <Text style={styles.total}>{`Total: ${totalLabel}`}</Text>
+
+        <View style={styles.productMark}>
+          <Text style={styles.productMarkText}>
+            {isAirtime ? '$' : 'GB'}
+          </Text>
         </View>
-      )}
+      </View>
+
+      <View style={styles.copyBlock}>
+        {!isAirtime ? <Text style={[styles.detail, selected && styles.selectedText]}>{product.carrier}</Text> : null}
+        <Text style={[styles.productName, selected && styles.selectedText]} numberOfLines={2}>
+          {isAirtime ? formatCurrency(product.price) : product.name}
+        </Text>
+
+        <View style={styles.metaRow}>
+          <Text style={[styles.total, selected && styles.selectedText]}>{`Total: ${formatCurrency(total)}`}</Text>
+
+          <Text style={[styles.tag, selected && styles.selectedTag]}>
+            {isAirtime ? 'Mobile credit' : t('socialData')}
+          </Text>
+        </View>
+        {recipientReceivesLabel ? (
+          <Text style={[styles.detail, selected && styles.selectedText]}>{`Recipient receives: ${recipientReceivesLabel}`}</Text>
+        ) : null}
+        {bundleHelpfulLine ? (
+          <Text style={[styles.detail, selected && styles.selectedText]}>{bundleHelpfulLine}</Text>
+        ) : null}
+        <Text style={[styles.detail, selected && styles.selectedText]}>
+          {`You pay: ${formatCurrency(product.price)} + ${formatCurrency(product.serviceFee)} fee`}
+        </Text>
+      </View>
+
+      {selected ? (
+        <View style={styles.selectedBadge}>
+          <Text style={styles.selectedBadgeText}>Selected</Text>
+        </View>
+      ) : null}
     </Pressable>
   );
 }
@@ -70,100 +94,129 @@ function getBundleHelpfulLine(product: TopUpProduct) {
 
 const styles = StyleSheet.create({
   card: {
+    flexGrow: 1,
+    flexBasis: '48%',
+    minWidth: '46%',
+    minHeight: 148,
     borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.light.border,
     backgroundColor: Colors.light.surface,
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.md,
-    gap: 6,
-    justifyContent: 'center',
-  },
-  airtimeCard: {
-    flexGrow: 1,
-    flexBasis: '48%',
-    minWidth: '46%',
-    minHeight: 96,
+    gap: Spacing.sm,
+    justifyContent: 'space-between',
+    position: 'relative',
   },
   bundleCard: {
     flexBasis: '100%',
     minWidth: '100%',
     minHeight: 164,
-    alignItems: 'stretch',
+  },
+  detail: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: Colors.light.textSecondary,
+    fontWeight: '600',
   },
   selectedCard: {
-    borderColor: Colors.light.primary,
-    backgroundColor: Colors.light.primarySoft,
+    borderColor: Colors.light.gold,
+    backgroundColor: Colors.light.primary,
   },
   pressedCard: {
     opacity: 0.94,
   },
-  airtimeContent: {
-    gap: 4,
+  visualRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.sm,
   },
-  bundleContent: {
-    gap: 4,
+  carrierMark: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surfaceAlt,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  airtimeAmount: {
-    fontSize: 24,
-    lineHeight: 30,
-    fontWeight: '700',
+  carrierMarkText: {
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '800',
     color: Colors.light.text,
   },
-  airtimeMeta: {
+  selectedCarrierMark: {
+    borderColor: 'rgba(255, 255, 255, 0.35)',
+    backgroundColor: 'rgba(255, 255, 255, 0.10)',
+  },
+  selectedText: {
+    color: Colors.light.surface,
+  },
+  productMark: {
+    minWidth: 48,
+    height: 36,
+    borderRadius: Radius.sm,
+    backgroundColor: Colors.light.text,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.xs,
+  },
+  productMarkText: {
     fontSize: 14,
-    lineHeight: 20,
-    color: Colors.light.textSecondary,
-    fontWeight: '600',
+    lineHeight: 18,
+    fontWeight: '800',
+    color: Colors.light.surface,
   },
-  airtimeTotal: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: Colors.light.text,
-    fontWeight: '700',
+  copyBlock: {
+    gap: Spacing.xs,
   },
-  bundleCarrier: {
-    fontSize: 12,
-    lineHeight: 16,
-    color: Colors.light.textSecondary,
-    fontWeight: '700',
-    letterSpacing: 0.4,
-    textTransform: 'uppercase',
-  },
-  bundleName: {
-    fontSize: 18,
+  productName: {
+    fontSize: 16,
     lineHeight: 24,
     fontWeight: '700',
     color: Colors.light.text,
   },
-  bundleMeta: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: Colors.light.textSecondary,
-    fontWeight: '600',
-  },
-  recipientReceives: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: Colors.light.text,
-    fontWeight: '600',
-  },
-  bundleDetail: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: Colors.light.textSecondary,
-    fontWeight: '600',
-  },
-  paymentBreakdown: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: Colors.light.textSecondary,
-    fontWeight: '600',
+  metaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: Spacing.xs,
   },
   total: {
-    fontSize: 14,
-    lineHeight: 20,
+    fontSize: 18,
+    lineHeight: 24,
     color: Colors.light.text,
+    fontWeight: '800',
+  },
+  tag: {
+    paddingHorizontal: Spacing.xs,
+    paddingVertical: 3,
+    borderRadius: Radius.sm,
+    backgroundColor: Colors.light.surfaceAlt,
+    color: Colors.light.textSecondary,
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '700',
+    overflow: 'hidden',
+  },
+  selectedTag: {
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    color: '#D9DFE8',
+  },
+  selectedBadge: {
+    alignSelf: 'flex-end',
+    paddingHorizontal: Spacing.xs,
+    paddingVertical: 3,
+    borderRadius: Radius.sm,
+    backgroundColor: Colors.light.gold,
+  },
+  selectedBadgeText: {
+    color: Colors.light.primary,
+    fontSize: 11,
+    lineHeight: 14,
     fontWeight: '700',
   },
 });
