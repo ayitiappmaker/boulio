@@ -12,6 +12,7 @@ import { getCurrentSession, signOut, subscribeToSessionChanges } from '@/lib/aut
 import { fetchMyActivity } from '@/lib/activity';
 import { deleteSavedRecipient, fetchSavedRecipients, type SavedRecipientRecord } from '@/lib/savedRecipients';
 import type { DataRequestRecord } from '@/lib/dataRequests';
+import { getFulfillmentStatusLabel, getTopUpOrderCustomerSummary } from '@/lib/fulfillment';
 import { getLanguage, supportedLanguages, setLanguage, t, useLanguage } from '@/lib/i18n';
 import { fetchMyProfile, isProfileRequiredError, upsertMyProfile, type ProfileRecord } from '@/lib/profile';
 import { getStoredUserMode, setStoredUserMode, subscribeToUserModeChanges } from '@/lib/userMode';
@@ -389,22 +390,47 @@ export default function AccountScreen() {
           <View style={styles.activityList}>
             {[...mapTopUpActivity(activityTopUpOrders), ...mapDataRequestActivity(activityDataRequests)]
               .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-              .map((item) => (
-                <View key={item.id} style={styles.activityRow}>
-                  <View style={styles.activityRowMain}>
-                    <View style={styles.activityRowTop}>
-                      <Text style={styles.activityType}>{item.typeLabel}</Text>
-                      <Text style={styles.activityAmount}>{formatMoney(item.totalUsd)}</Text>
+              .map((item) =>
+                item.kind === 'topup_order' ? (
+                  <View key={item.id} style={styles.orderCard}>
+                    <View style={styles.orderCardHeader}>
+                      <View style={styles.orderCardHeaderCopy}>
+                        <Text style={styles.activityType}>{item.typeLabel}</Text>
+                        <Text style={styles.orderCardProduct}>{item.productName}</Text>
+                      </View>
+                      <View style={[styles.statusChip, statusToneStyles[item.statusTone]]}>
+                        <Text style={[styles.statusChipText, statusToneTextStyles[item.statusTone]]}>{item.statusLabel}</Text>
+                      </View>
                     </View>
-                    <Text style={styles.activitySubtitle}>{item.recipientPhone}</Text>
-                    <Text style={styles.activityDetail}>{item.productName}</Text>
-                    <View style={styles.activityMetaRow}>
-                      <Text style={styles.activityDate}>{formatDate(item.createdAt)}</Text>
-                      <Text style={styles.activityStatus}>{item.statusLabel}</Text>
+
+                    <Text style={styles.orderCardSummary}>{item.statusDetail}</Text>
+
+                    <View style={styles.orderDetailGrid}>
+                      {item.detailRows.map((detail) => (
+                        <View key={`${item.id}-${detail.label}`} style={styles.orderDetailItem}>
+                          <Text style={styles.orderDetailLabel}>{detail.label}</Text>
+                          <Text style={styles.orderDetailValue}>{detail.value}</Text>
+                        </View>
+                      ))}
                     </View>
                   </View>
-                </View>
-              ))}
+                ) : (
+                  <View key={item.id} style={styles.activityRow}>
+                    <View style={styles.activityRowMain}>
+                      <View style={styles.activityRowTop}>
+                        <Text style={styles.activityType}>{item.typeLabel}</Text>
+                        <Text style={styles.activityAmount}>{formatMoney(item.totalUsd)}</Text>
+                      </View>
+                      <Text style={styles.activitySubtitle}>{item.recipientPhone}</Text>
+                      <Text style={styles.activityDetail}>{item.productName}</Text>
+                      <View style={styles.activityMetaRow}>
+                        <Text style={styles.activityDate}>{formatDate(item.createdAt)}</Text>
+                        <Text style={styles.activityStatus}>{item.statusLabel}</Text>
+                      </View>
+                    </View>
+                  </View>
+                )
+              )}
           </View>
         )}
       </SectionCard>
@@ -543,34 +569,69 @@ function isProfileCompleteRecord(profile: ProfileRecord | null) {
 
 type ActivityRowItem = {
   id: string;
+  kind: 'topup_order' | 'data_request';
   typeLabel: string;
   recipientPhone: string;
   productName: string;
   totalUsd: number;
   statusLabel: string;
+  statusDetail: string;
+  statusTone: 'neutral' | 'success' | 'warning' | 'danger';
+  detailRows: Array<{ label: string; value: string }>;
   createdAt: string;
 };
 
 function mapTopUpActivity(orders: TopUpOrderRecord[]): ActivityRowItem[] {
-  return orders.map((order) => ({
-    id: `topup-${order.id}`,
-    typeLabel: t('topUpOrder'),
-    recipientPhone: order.recipientPhone,
-    productName: order.productName,
-    totalUsd: order.totalUsd,
-    statusLabel: formatTopUpStatusLabel(order),
-    createdAt: order.createdAt,
-  }));
+  return orders.map((order) => {
+    const summary = getTopUpOrderCustomerSummary({
+      status: order.status,
+      paymentStatus: order.paymentStatus,
+      supplierStatus: order.supplierStatus,
+    });
+
+    return {
+      id: `topup-${order.id}`,
+      kind: 'topup_order',
+      typeLabel: t('topUpOrder'),
+      recipientPhone: order.recipientPhone,
+      productName: order.productName,
+      totalUsd: order.totalUsd,
+      statusDetail: summary.detail,
+      statusLabel: summary.label,
+      statusTone: summary.tone,
+      detailRows: [
+        { label: t('carrier'), value: order.carrier },
+        { label: t('product'), value: order.productName },
+        { label: t('recipientPhone'), value: order.recipientPhone },
+        { label: t('amount'), value: formatMoney(order.amountUsd) },
+        { label: t('serviceFee'), value: formatMoney(order.serviceFeeUsd) },
+        { label: t('totalPaid'), value: formatMoney(order.totalUsd) },
+        { label: t('orderDate'), value: formatDate(order.createdAt) },
+        { label: t('status'), value: summary.label },
+      ],
+      createdAt: order.createdAt,
+    };
+  });
 }
 
 function mapDataRequestActivity(requests: DataRequestRecord[]): ActivityRowItem[] {
   return requests.map((request) => ({
     id: `request-${request.id}`,
+    kind: 'data_request',
     typeLabel: t('dataRequest'),
     recipientPhone: request.recipientPhone,
     productName: request.bundleLabel ?? request.productName,
     totalUsd: request.totalUsd,
-    statusLabel: formatDataRequestActivityStatusLabel(request),
+    statusLabel: getFulfillmentStatusLabel({
+      targetType: 'data_request',
+      publicStatus: request.publicStatus,
+      internalStatus: request.internalStatus,
+      paymentStatus: request.paymentStatus,
+      fulfillmentStatus: request.fulfillmentStatus,
+    }),
+    statusDetail: '',
+    statusTone: 'neutral',
+    detailRows: [],
     createdAt: request.createdAt,
   }));
 }
@@ -581,101 +642,6 @@ function formatDate(value: string) {
 
 function formatMoney(value: number) {
   return `$${value.toFixed(2)}`;
-}
-
-function formatTopUpStatusLabel(order: TopUpOrderRecord) {
-  switch (order.paymentStatus) {
-    case 'unpaid':
-      return t('unpaid');
-    case 'pending':
-      return t('pendingPayment');
-    case 'paid':
-      return t('paid');
-    case 'failed':
-      return t('failed');
-    case 'refunded':
-      return t('cancelled');
-    default:
-      break;
-  }
-
-  switch (order.status) {
-    case 'completed':
-      return t('completed');
-    case 'processing':
-      return t('processing');
-    case 'paid':
-      return t('paid');
-    case 'failed':
-      return t('failed');
-    case 'cancelled':
-    case 'refunded':
-      return t('cancelled');
-    case 'draft':
-      return t('unpaid');
-    case 'pending_payment':
-      return t('pendingPayment');
-    default:
-      break;
-  }
-
-  switch (order.supplierStatus) {
-    case 'not_sent':
-      return t('notSent');
-    case 'pending':
-      return t('processing');
-    case 'successful':
-      return t('completed');
-    case 'failed':
-      return t('failed');
-    default:
-      return t('processing');
-  }
-}
-
-function formatDataRequestActivityStatusLabel(request: DataRequestRecord) {
-  switch (request.paymentStatus) {
-    case 'paid':
-      return t('paid');
-    case 'pending':
-      return t('pendingPayment');
-    case 'failed':
-      return t('failed');
-    case 'refunded':
-      return t('cancelled');
-    default:
-      break;
-  }
-
-  switch (request.internalStatus) {
-    case 'processing':
-      return t('processing');
-    case 'completed':
-      return t('completed');
-    case 'failed':
-      return t('failed');
-    case 'cancelled':
-      return t('cancelled');
-    case 'payment_pending':
-      return t('pendingPayment');
-    default:
-      break;
-  }
-
-  switch (request.publicStatus) {
-    case 'open':
-      return t('waitingForSupporter');
-    case 'paid':
-      return t('paid');
-    case 'completed':
-      return t('completed');
-    case 'expired':
-      return t('expired');
-    case 'cancelled':
-      return t('cancelled');
-    default:
-      return request.publicStatus;
-  }
 }
 
 function languageLabel(code: string) {
@@ -841,6 +807,57 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: Colors.light.border,
   },
+  orderCard: {
+    paddingVertical: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+    gap: Spacing.sm,
+  },
+  orderCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  orderCardHeaderCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  orderCardProduct: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: Colors.light.textSecondary,
+  },
+  orderCardSummary: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: Colors.light.textSecondary,
+  },
+  orderDetailGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+  },
+  orderDetailItem: {
+    minWidth: 140,
+    flexGrow: 1,
+    gap: 2,
+    paddingVertical: 4,
+  },
+  orderDetailLabel: {
+    fontSize: 11,
+    lineHeight: 14,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    color: Colors.light.textSecondary,
+    fontWeight: '700',
+  },
+  orderDetailValue: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: Colors.light.text,
+    fontWeight: '600',
+  },
   activityRow: {
     paddingVertical: Spacing.md,
     borderBottomWidth: 1,
@@ -892,6 +909,18 @@ const styles = StyleSheet.create({
     color: Colors.light.primary,
     fontWeight: '600',
     textTransform: 'capitalize',
+  },
+  statusChip: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  statusChipText: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
   },
   noticeCard: {
     padding: Spacing.md,
@@ -1014,3 +1043,37 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
+
+const statusToneStyles = {
+  neutral: {
+    backgroundColor: Colors.light.surfaceMuted,
+    borderColor: Colors.light.border,
+  },
+  success: {
+    backgroundColor: '#F0FDF4',
+    borderColor: '#BBF7D0',
+  },
+  warning: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+  },
+  danger: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+  },
+} as const;
+
+const statusToneTextStyles = {
+  neutral: {
+    color: Colors.light.textSecondary,
+  },
+  success: {
+    color: '#15803D',
+  },
+  warning: {
+    color: '#B45309',
+  },
+  danger: {
+    color: '#B91C1C',
+  },
+} as const;

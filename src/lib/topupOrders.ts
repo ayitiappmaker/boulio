@@ -19,6 +19,7 @@ export type TopUpSupplierStatus = 'not_sent' | 'pending' | 'successful' | 'faile
 
 export type TopUpOrderRecord = {
   id: string;
+  productId: string | null;
   carrier: TopUpCarrier;
   productType: 'airtime' | 'data';
   productName: string;
@@ -36,6 +37,7 @@ export type TopUpOrderRecord = {
 };
 
 export type CreatePendingTopUpOrderInput = {
+  productId: string;
   carrier: TopUpCarrier;
   productType: 'airtime' | 'data';
   productName: string;
@@ -47,6 +49,7 @@ export type CreatePendingTopUpOrderInput = {
 
 type TopUpOrderRow = {
   id: string;
+  product_id: string | null;
   carrier: TopUpCarrier;
   product_type: 'airtime' | 'data';
   product_name: string;
@@ -83,6 +86,7 @@ export async function createPendingTopUpOrder(
     .from('topup_orders')
     .insert({
       user_id: session.user.id,
+      product_id: input.productId,
       carrier: input.carrier,
       product_type: input.productType,
       product_name: input.productName,
@@ -96,7 +100,7 @@ export async function createPendingTopUpOrder(
       supplier_status: 'not_sent',
     })
     .select(
-      'id, carrier, product_type, product_name, recipient_phone, recipient_name, amount_usd, service_fee_usd, total_usd, status, payment_status, supplier_status, supplier_reference, created_at, updated_at'
+      'id, product_id, carrier, product_type, product_name, recipient_phone, recipient_name, amount_usd, service_fee_usd, total_usd, status, payment_status, supplier_status, supplier_reference, created_at, updated_at'
     )
     .single();
 
@@ -120,7 +124,7 @@ export async function fetchMyTopUpOrders(): Promise<TopUpOrderRecord[]> {
   const { data, error } = await supabase
     .from('topup_orders')
     .select(
-      'id, carrier, product_type, product_name, recipient_phone, recipient_name, amount_usd, service_fee_usd, total_usd, status, payment_status, supplier_status, supplier_reference, created_at, updated_at'
+      'id, product_id, carrier, product_type, product_name, recipient_phone, recipient_name, amount_usd, service_fee_usd, total_usd, status, payment_status, supplier_status, supplier_reference, created_at, updated_at'
     )
     .order('created_at', { ascending: false });
 
@@ -134,6 +138,7 @@ export async function fetchMyTopUpOrders(): Promise<TopUpOrderRecord[]> {
 function mapTopUpOrderRow(row: TopUpOrderRow): TopUpOrderRecord {
   return {
     id: row.id,
+    productId: row.product_id,
     carrier: row.carrier,
     productType: row.product_type,
     productName: row.product_name,
@@ -154,6 +159,7 @@ function mapTopUpOrderRow(row: TopUpOrderRow): TopUpOrderRecord {
 function mapMockTopUpOrder(order: (typeof mockTopUpOrders)[number]): TopUpOrderRecord {
   return {
     id: order.id,
+    productId: null,
     carrier: order.carrier,
     productType: order.productType,
     productName: order.productLabel,

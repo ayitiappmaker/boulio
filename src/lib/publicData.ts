@@ -39,6 +39,9 @@ type TopUpProductRow = {
   service_fee_usd: number | string;
   total_usd?: number | string;
   active: boolean;
+  external_provider?: string | null;
+  external_product_id?: string | null;
+  external_product_metadata?: Record<string, unknown> | null;
 };
 
 const mockDateBuckets = {
@@ -64,7 +67,9 @@ export async function fetchActiveTopUpProducts(): Promise<TopUpProduct[]> {
   try {
     const { data, error } = await supabase
       .from('topup_products')
-      .select('id, carrier, product_type, name, bundle_label, amount_usd, service_fee_usd, active')
+      .select(
+        'id, carrier, product_type, name, bundle_label, amount_usd, service_fee_usd, total_usd, active, external_provider, external_product_id, external_product_metadata'
+      )
       .eq('active', true)
       .order('carrier', { ascending: true })
       .order('product_type', { ascending: true })
@@ -139,13 +144,23 @@ function mapLotteryResultRow(row: LotteryResultRow): LotteryResult {
 function mapTopUpProductRow(row: TopUpProductRow): TopUpProduct {
   const price = Number(row.amount_usd);
   const serviceFee = Number(row.service_fee_usd);
+  const total = Number(row.total_usd ?? price + serviceFee);
   return {
     id: row.id,
     carrier: row.carrier,
     productType: row.product_type,
+    active: row.active,
+    name: row.name,
+    bundleLabel: row.bundle_label,
+    amountUsd: price,
+    serviceFeeUsd: serviceFee,
+    totalUsd: total,
     label: row.bundle_label ?? formatCurrency(price),
     price,
     serviceFee,
+    externalProvider: row.external_provider ?? null,
+    externalProductId: row.external_product_id ?? null,
+    externalProductMetadata: row.external_product_metadata ?? null,
   };
 }
 

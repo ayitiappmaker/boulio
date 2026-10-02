@@ -21,9 +21,18 @@ export type TopUpProduct = {
   id: string;
   carrier: TopUpCarrier;
   productType: 'airtime' | 'data';
+  active: boolean;
+  name: string;
+  bundleLabel: string | null;
+  amountUsd: number;
+  serviceFeeUsd: number;
+  totalUsd: number;
   label: string;
   price: number;
   serviceFee: number;
+  externalProvider?: string | null;
+  externalProductId?: string | null;
+  externalProductMetadata?: Record<string, unknown> | null;
 };
 
 export type TopUpOrder = {

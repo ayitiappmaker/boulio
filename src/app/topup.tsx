@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type ImageSourcePropType } from 'react-native';
-import { useRouter } from 'expo-router';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 
 import { ChipSelector } from '@/components/ChipSelector';
 import { CompleteProfileForm, type ProfileFormValues } from '@/components/CompleteProfileForm';
@@ -19,17 +19,23 @@ import { formatServiceTotal } from '@/lib/paymentFlow';
 import { createPaymentForDataRequest, createPaymentForTopUpOrder, openCheckoutUrl } from '@/lib/payments';
 import { fetchMyProfile, isProfileRequiredError, upsertMyProfile, type ProfileRecord } from '@/lib/profile';
 import { getStoredUserMode, subscribeToUserModeChanges } from '@/lib/userMode';
+import { getRecipientReceivesLabel } from '@/lib/topupProductDisplay';
+import {
+  detectHaitiCarrierFromPhone,
+  isValidHaitiMobilePhone,
+  normalizeHaitiPhoneForFulfillment,
+} from '@/lib/carrierDetection';
 import type { Session } from '@supabase/supabase-js';
 import type { TopUpCarrier, TopUpProduct, UserMode } from '@/lib/types';
 
-type FlowMode = 'choose' | 'send' | 'request';
-type SendStep = 1 | 2 | 3 | 4 | 5 | 6;
+type SendStep = 1 | 2 | 3;
 type RequestStep = 1 | 2 | 3 | 4 | 5;
 type SendProductType = 'airtime' | 'data';
 type PendingProfileAction = 'send' | 'request' | null;
+type ProductFilter = 'All' | 'airtime' | 'data';
 
 const carrierOptions: readonly TopUpCarrier[] = ['Digicel', 'Natcom'];
-const sendProductTypeOptions: readonly SendProductType[] = ['airtime', 'data'];
+const productFilterOptions: readonly ProductFilter[] = ['All', 'airtime', 'data'];
 
 const emptyProfileForm: ProfileFormValues = {
   fullName: '',
@@ -40,8 +46,8 @@ const emptyProfileForm: ProfileFormValues = {
 
 export default function TopUpScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ mode?: string | string[] }>();
   useLanguage();
-  const [flowMode, setFlowMode] = useState<FlowMode>('choose');
   const [session, setSession] = useState<Session | null>(null);
   const [products, setProducts] = useState<TopUpProduct[]>(mockTopUpProducts);
   const [productsLoading, setProductsLoading] = useState(true);
@@ -58,8 +64,11 @@ export default function TopUpScreen() {
   const [profileForm, setProfileForm] = useState<ProfileFormValues>(emptyProfileForm);
 
   const [sendStep, setSendStep] = useState<SendStep>(1);
-  const [sendCarrier, setSendCarrier] = useState<TopUpCarrier>('Digicel');
-  const [sendProductType, setSendProductType] = useState<SendProductType>('airtime');
+  const [sendCarrier, setSendCarrier] = useState<TopUpCarrier | null>(null);
+  const [productFilter, setProductFilter] = useState<ProductFilter>('All');
+  const [productSearch, setProductSearch] = useState('');
+  const [sendProductType, setSendProductType] = useState<'airtime' | 'data'>('airtime');
+  const [sendAirtimeAmountUsd, setSendAirtimeAmountUsd] = useState<number | null>(null);
   const [sendRecipientName, setSendRecipientName] = useState('');
   const [sendPhoneNumber, setSendPhoneNumber] = useState('');
   const [selectedSendProductId, setSelectedSendProductId] = useState<string | null>(null);
@@ -75,6 +84,7 @@ export default function TopUpScreen() {
   const [requestRecipientName, setRequestRecipientName] = useState('');
   const [requestPhoneNumber, setRequestPhoneNumber] = useState('');
   const [selectedRequestProductId, setSelectedRequestProductId] = useState<string | null>(null);
+  const [requestProductSearch, setRequestProductSearch] = useState('');
   const [requestSelectedRecipientId, setRequestSelectedRecipientId] = useState<string | null>(null);
   const [requestSaveRecipient, setRequestSaveRecipient] = useState(false);
   const [requestRecipientMessage, setRequestRecipientMessage] = useState<string | null>(null);
@@ -85,6 +95,10 @@ export default function TopUpScreen() {
   const [requestEditNote, setRequestEditNote] = useState<string | null>(null);
   const [requestPaymentNotice, setRequestPaymentNotice] = useState<string | null>(null);
   const [sendPaymentNotice, setSendPaymentNotice] = useState<string | null>(null);
+  const [sendCarrierManual, setSendCarrierManual] = useState(false);
+
+  const requestedMode = Array.isArray(params.mode) ? params.mode[0] : params.mode;
+  const requestModalVisible = requestedMode === 'request';
 
   useEffect(() => {
     let active = true;
@@ -213,29 +227,98 @@ export default function TopUpScreen() {
     };
   }, [session]);
 
-  const sendProducts = useMemo(
-    () => products.filter((product) => product.carrier === sendCarrier && product.productType === sendProductType),
-    [products, sendCarrier, sendProductType]
+  const activeSendProducts = useMemo(
+    () => products.filter((product) => product.active && isUuid(product.id)),
+    [products]
   );
-  const requestProducts = useMemo(
-    () => products.filter((product) => product.carrier === requestCarrier && product.productType === 'data'),
-    [products, requestCarrier]
-  );
+  const displaySendProducts = useMemo(() => dedupeAirtimeProducts(activeSendProducts), [activeSendProducts]);
+  const filteredSendProducts = useMemo(() => {
+    const normalizedSearch = productSearch.trim().toLowerCase();
 
-  const selectedSendProduct = sendProducts.find((product) => product.id === selectedSendProductId) ?? null;
+    return displaySendProducts.filter((product) => {
+      const filterMatches =
+        productFilter === 'All' || product.productType === productFilter;
+      if (!filterMatches) {
+        return false;
+      }
+
+      if (!normalizedSearch) {
+        return true;
+      }
+
+      const searchSpace = [
+        product.carrier,
+        product.name,
+        product.bundleLabel ?? '',
+        product.productType === 'airtime' ? 'airtime' : 'internet bundle',
+        formatCurrency(product.amountUsd),
+        formatCurrency(product.serviceFeeUsd),
+        formatCurrency(product.totalUsd),
+      ]
+        .join(' ')
+        .toLowerCase();
+
+      return searchSpace.includes(normalizedSearch);
+    });
+  }, [displaySendProducts, productFilter, productSearch]);
+  const requestBundleProducts = useMemo(
+    () => products.filter((product) => product.active && product.productType === 'data'),
+    [products]
+  );
+  const filteredRequestProducts = useMemo(() => {
+    const normalizedSearch = requestProductSearch.trim().toLowerCase();
+
+    return requestBundleProducts.filter((product) => {
+      if (!normalizedSearch) {
+        return true;
+      }
+
+      const searchSpace = [
+        product.carrier,
+        product.name,
+        product.bundleLabel ?? '',
+        'internet bundle',
+        formatCurrency(product.amountUsd),
+        formatCurrency(product.serviceFeeUsd),
+        formatCurrency(product.totalUsd),
+      ]
+        .join(' ')
+        .toLowerCase();
+
+      return searchSpace.includes(normalizedSearch);
+    });
+  }, [requestBundleProducts, requestProductSearch]);
+
+  const selectedSendProductCandidate =
+    products.find((product) => product.id === selectedSendProductId && product.active) ?? null;
+  const selectedSendProductIdIsUuid = Boolean(
+    selectedSendProductCandidate && isUuid(selectedSendProductCandidate.id)
+  );
   const selectedRequestProduct =
-    requestProducts.find((product) => product.id === selectedRequestProductId) ?? null;
+    requestBundleProducts.find((product) => product.id === selectedRequestProductId) ?? null;
+  const sendPhoneValid = isValidHaitiMobilePhone(sendPhoneNumber);
+  const detectedSendCarrier = sendPhoneValid ? detectHaitiCarrierFromPhone(sendPhoneNumber) : null;
+  const confirmedSendCarrier = sendCarrier ?? detectedSendCarrier;
+  const selectedSendProduct =
+    selectedSendProductIdIsUuid
+      ? resolveSelectedTopUpProduct(activeSendProducts, selectedSendProductCandidate, confirmedSendCarrier)
+      : null;
+  const sendProductSelectionInvalid = Boolean(selectedSendProductCandidate && !selectedSendProductIdIsUuid);
+  const carrierMismatch = Boolean(
+    selectedSendProduct && confirmedSendCarrier && selectedSendProduct.carrier !== confirmedSendCarrier
+  );
+  const requestPhoneValid = isValidHaitiMobilePhone(requestPhoneNumber);
+  const sendPhoneError = sendPhoneNumber.trim() && !sendPhoneValid ? t('invalidHaitiMobileNumber') : null;
+  const requestPhoneError = requestPhoneNumber.trim() && !requestPhoneValid ? t('invalidHaitiMobileNumber') : null;
 
   const resetSendFlow = () => {
     setSendStep(1);
-    setSendCarrier('Digicel');
-    setSendProductType('airtime');
-    setSendRecipientName('');
+    setSendCarrier(null);
+    setSendCarrierManual(false);
+    setProductFilter('All');
+    setProductSearch('');
     setSendPhoneNumber('');
     setSelectedSendProductId(null);
-    setSendSelectedRecipientId(null);
-    setSendSaveRecipient(false);
-    setSendRecipientMessage(null);
     setSendPaymentNotice(null);
     setSendOrder(null);
     setSendSubmitting(false);
@@ -248,6 +331,7 @@ export default function TopUpScreen() {
     setRequestRecipientName('');
     setRequestPhoneNumber('');
     setSelectedRequestProductId(null);
+    setRequestProductSearch('');
     setRequestSelectedRecipientId(null);
     setRequestSaveRecipient(false);
     setRequestRecipientMessage(null);
@@ -257,12 +341,6 @@ export default function TopUpScreen() {
     setRequestStatus(null);
     setRequestEditNote(null);
     setRequestPaymentNotice(null);
-  };
-
-  const resetAllFlows = () => {
-    resetSendFlow();
-    resetRequestFlow();
-    setFlowMode('choose');
   };
 
   const hasCompleteProfile =
@@ -325,31 +403,30 @@ export default function TopUpScreen() {
     }
   };
 
-  const startSendFlow = (productType: SendProductType) => {
-    resetRequestFlow();
-    changeSendProductType(productType);
-    setFlowMode('send');
-    setSendStep(2);
-  };
-
-  const startRequestFlow = () => {
-    resetSendFlow();
-    setFlowMode('request');
-  };
-
   const changeSendCarrier = (carrier: TopUpCarrier) => {
+    if (!isValidHaitiMobilePhone(sendPhoneNumber)) {
+      return;
+    }
+
     setSendCarrier(carrier);
-    setSelectedSendProductId(null);
-    setSendSelectedRecipientId(null);
+    setSendCarrierManual(true);
     setSendError(null);
   };
 
-  const changeSendProductType = (productType: SendProductType) => {
-    setSendProductType(productType);
-    setSelectedSendProductId(null);
-    setSendSelectedRecipientId(null);
-    setSendError(null);
-  };
+  useEffect(() => {
+    if (!sendPhoneNumber.trim() || !isValidHaitiMobilePhone(sendPhoneNumber)) {
+      setSendCarrier(null);
+      setSendCarrierManual(false);
+      return;
+    }
+
+    const detectedCarrier = detectHaitiCarrierFromPhone(sendPhoneNumber);
+    if (detectedCarrier && !sendCarrierManual) {
+      setSendCarrier(detectedCarrier);
+    } else if (!detectedCarrier && !sendCarrierManual) {
+      setSendCarrier(null);
+    }
+  }, [sendCarrierManual, sendPhoneNumber]);
 
   const changeRequestCarrier = (carrier: TopUpCarrier) => {
     setRequestCarrier(carrier);
@@ -358,29 +435,20 @@ export default function TopUpScreen() {
     setRequestError(null);
   };
 
-  const editRequest = () => {
-    setRequestStep(4);
-    setRequestStatus(null);
-    setRequestBusy(false);
-    setRequestError(null);
-    if (requestLink) {
-      setRequestEditNote(t('editWillCreateNewLinkNote'));
-    }
-  };
-
   const createAnotherRequest = () => {
     resetRequestFlow();
-    setFlowMode('choose');
   };
 
+  useEffect(() => {
+    if (requestModalVisible) {
+      resetRequestFlow();
+    }
+  }, [requestModalVisible]);
+
   const selectSendRecipient = (recipient: SavedRecipientRecord) => {
-    setSendSelectedRecipientId(recipient.id);
-    setSendRecipientName(recipient.name);
-    setSendPhoneNumber(recipient.phoneNumber);
     setSendCarrier(recipient.carrier);
-    setSelectedSendProductId(null);
+    setSendCarrierManual(true);
     setSendError(null);
-    setSendRecipientMessage(null);
   };
 
   const selectRequestRecipient = (recipient: SavedRecipientRecord) => {
@@ -425,15 +493,15 @@ export default function TopUpScreen() {
   const sendReviewSummary = selectedSendProduct
     ? [
         { label: t('orderType'), value: t('topUpOrder') },
-        { label: t('recipientName'), value: sendRecipientName.trim() || '—' },
         { label: t('phoneNumber'), value: sendPhoneNumber },
-        { label: t('carrier'), value: sendCarrier },
-        { label: t('product'), value: selectedSendProduct.label },
-        { label: t('servicePrice'), value: formatServiceTotal(selectedSendProduct.price) },
-        { label: t('serviceFee'), value: formatServiceTotal(selectedSendProduct.serviceFee) },
+        { label: t('carrier'), value: confirmedSendCarrier ?? selectedSendProduct.carrier },
+        { label: t('product'), value: selectedSendProduct.name },
+        { label: t('recipientReceives'), value: getRecipientReceivesLabel(selectedSendProduct) },
+        { label: t('servicePrice'), value: formatServiceTotal(selectedSendProduct.amountUsd) },
+        { label: t('serviceFee'), value: formatServiceTotal(selectedSendProduct.serviceFeeUsd) },
         {
           label: t('serviceTotal'),
-          value: formatServiceTotal(selectedSendProduct.price + selectedSendProduct.serviceFee),
+          value: formatServiceTotal(selectedSendProduct.totalUsd),
           strong: true,
         },
       ]
@@ -441,25 +509,25 @@ export default function TopUpScreen() {
 
   const requestReviewSummary = selectedRequestProduct
     ? [
-        { label: t('orderType'), value: t('dataRequest') },
-        { label: t('recipientName'), value: requestRecipientName.trim() || '—' },
-        { label: t('phoneNumber'), value: requestPhoneNumber },
+        { label: t('product'), value: selectedRequestProduct.name },
+        { label: t('recipientReceives'), value: getRecipientReceivesLabel(selectedRequestProduct) },
         { label: t('carrier'), value: requestCarrier },
-        { label: t('product'), value: selectedRequestProduct.label },
-        { label: t('servicePrice'), value: formatServiceTotal(selectedRequestProduct.price) },
-        { label: t('serviceFee'), value: formatServiceTotal(selectedRequestProduct.serviceFee) },
-        {
-          label: t('serviceTotal'),
-          value: formatServiceTotal(selectedRequestProduct.price + selectedRequestProduct.serviceFee),
-          strong: true,
-        },
+        { label: t('phoneNumber'), value: requestPhoneNumber },
+        { label: t('servicePrice'), value: formatServiceTotal(selectedRequestProduct.amountUsd) },
+        { label: t('serviceFee'), value: formatServiceTotal(selectedRequestProduct.serviceFeeUsd) },
+        { label: t('serviceTotal'), value: formatServiceTotal(selectedRequestProduct.totalUsd), strong: true },
       ]
     : [];
 
-  const sendStepLabel = `STEP ${Math.min(sendStep, 5)} OF 5`;
+  const sendStepLabel = `STEP ${sendStep} OF 3`;
   const requestStepLabel = `REQUEST STEP ${requestStep} OF 5`;
 
   const confirmSendOrder = async (skipProfileCheck = false) => {
+    if (selectedSendProductCandidate && !selectedSendProductIdIsUuid) {
+      setSendError('Product is not ready for checkout. Please refresh and try again.');
+      return;
+    }
+
     if (!selectedSendProduct) {
       setSendError(t('chooseAProductBeforeContinuing'));
       return;
@@ -470,6 +538,28 @@ export default function TopUpScreen() {
       return;
     }
 
+    const normalizedPhone = normalizeHaitiPhoneForFulfillment(sendPhoneNumber);
+    if (!normalizedPhone) {
+      setSendError(t('invalidHaitiMobileNumber'));
+      return;
+    }
+
+    const effectiveCarrier = confirmedSendCarrier;
+    if (!effectiveCarrier) {
+      setSendError(t('confirmCarrier'));
+      return;
+    }
+
+    if (selectedSendProduct.carrier !== effectiveCarrier) {
+      setSendError(
+        t('productCarrierMismatch', {
+          productCarrier: selectedSendProduct.carrier,
+          detectedCarrier: effectiveCarrier,
+        })
+      );
+      return;
+    }
+
     if (!skipProfileCheck && !hasCompleteProfile) {
       promptForProfileCompletion('send');
       return;
@@ -477,30 +567,29 @@ export default function TopUpScreen() {
 
     setSendSubmitting(true);
     setSendError(null);
+    setSendPaymentNotice(null);
 
     try {
       const nextOrder = await createPendingTopUpOrder({
-        carrier: sendCarrier,
-        productType: sendProductType,
-        productName: getProductName(sendCarrier, sendProductType, selectedSendProduct),
-        recipientPhone: sendPhoneNumber.trim(),
-        recipientName: sendRecipientName.trim() || null,
-        amountUsd: selectedSendProduct.price,
-        serviceFeeUsd: selectedSendProduct.serviceFee,
+        productId: selectedSendProduct.id,
+        carrier: selectedSendProduct.carrier,
+        productType: selectedSendProduct.productType,
+        productName: selectedSendProduct.name,
+        recipientPhone: normalizedPhone,
+        recipientName: null,
+        amountUsd: selectedSendProduct.amountUsd,
+        serviceFeeUsd: selectedSendProduct.serviceFeeUsd,
       });
 
       setSendOrder(nextOrder);
-      setSendRecipientMessage(null);
-      setSendStep(6);
-
-      if (sendSaveRecipient) {
-        await maybeSaveRecipient(
-          sendRecipientName.trim(),
-          sendPhoneNumber.trim(),
-          sendCarrier,
-          setSendRecipientMessage
-        );
+      const paymentResult = await createPaymentForTopUpOrder(nextOrder.id);
+      if (paymentResult.checkoutUrl) {
+        setSendPaymentNotice(t('stripeCheckoutOpenedNotice'));
+        await openCheckoutUrl(paymentResult.checkoutUrl);
+        return;
       }
+
+      setSendPaymentNotice(paymentResult.message);
     } catch (error) {
       if (isProfileRequiredError(error)) {
         promptForProfileCompletion('send');
@@ -514,12 +603,18 @@ export default function TopUpScreen() {
 
   const createRequest = async (skipProfileCheck = false) => {
     if (!selectedRequestProduct) {
-      setRequestError(t('chooseADataPackageBeforeContinuing'));
+      setRequestError(t('chooseAProductBeforeContinuing'));
       return;
     }
 
     if (!isSignedIn) {
       setRequestError(t('signInRequiredBeforeRequestLink'));
+      return;
+    }
+
+    const normalizedPhone = normalizeHaitiPhoneForFulfillment(requestPhoneNumber);
+    if (!normalizedPhone) {
+      setRequestError(t('invalidHaitiMobileNumber'));
       return;
     }
 
@@ -534,12 +629,12 @@ export default function TopUpScreen() {
 
     try {
       const nextRequest = await createDataRequest({
-        recipientPhone: requestPhoneNumber.trim(),
+        recipientPhone: normalizedPhone,
         carrier: requestCarrier,
-        productName: getProductName(requestCarrier, 'data', selectedRequestProduct),
-        bundleLabel: selectedRequestProduct.label,
-        amountUsd: selectedRequestProduct.price,
-        serviceFeeUsd: selectedRequestProduct.serviceFee,
+        productName: selectedRequestProduct.name,
+        bundleLabel: selectedRequestProduct.bundleLabel,
+        amountUsd: selectedRequestProduct.amountUsd,
+        serviceFeeUsd: selectedRequestProduct.serviceFeeUsd,
       });
 
       setRequestLink(`https://boulio.app/request/${nextRequest.requestCode}`);
@@ -551,7 +646,7 @@ export default function TopUpScreen() {
       if (requestSaveRecipient) {
         await maybeSaveRecipient(
           requestRecipientName.trim(),
-          requestPhoneNumber.trim(),
+          normalizedPhone,
           requestCarrier,
           setRequestRecipientMessage
         );
@@ -581,25 +676,6 @@ export default function TopUpScreen() {
       }
     } catch {
       setRequestStatus(t('copyLinkUnavailable'));
-    }
-  };
-
-  const handleSendPaymentComingSoon = async () => {
-    try {
-      if (!sendOrder) {
-        setSendPaymentNotice(t('onlinePaymentWillBeConnectedSoon'));
-        return;
-      }
-
-      const result = await createPaymentForTopUpOrder(sendOrder.id);
-      if (result.checkoutUrl) {
-        await openCheckoutUrl(result.checkoutUrl);
-        return;
-      }
-
-      setSendPaymentNotice(result.message);
-    } catch {
-      setSendPaymentNotice(t('onlinePaymentWillBeConnectedSoon'));
     }
   };
 
@@ -648,400 +724,377 @@ export default function TopUpScreen() {
         </View>
       </Modal>
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-      <View style={styles.hero}>
-        <Text style={styles.title}>Top up Haiti</Text>
-      </View>
-
-      {flowMode === 'choose' ? (
-        <View style={styles.flowStack}>
-          <ProgressIndicator step={1} />
-          <View style={styles.stepHeading}>
-            <Text style={styles.flowLabel}>STEP 1 OF 5</Text>
-            <Text style={styles.flowTitle}>What would you like to send?</Text>
-            <Text style={styles.flowSubtitle}>Choose a top up for someone in Haiti.</Text>
-          </View>
-          <View style={styles.entryGrid}>
-            <ProductTypeCard
-              title="Phone Credit"
-              body="Top up instantly"
-              image={require('../../assets/images/phone-credit-product.jpeg')}
-              onPress={() => startSendFlow('airtime')}
-            />
-            <ProductTypeCard
-              title="Data Bundle"
-              body="Social data packages"
-              image={require('../../assets/images/social-data-product.jpeg')}
-              onPress={() => startSendFlow('data')}
-            />
-          </View>
-          {productsLoading ? <Text style={styles.loadingText}>{t('loadingProducts')}</Text> : null}
-          <Pressable accessibilityRole="button" onPress={startRequestFlow} style={styles.requestEntry}>
-            <View style={styles.requestEntryCopy}>
-              <Text style={styles.requestEntryTitle}>{t('requestData')}</Text>
-              <Text style={styles.requestEntryBody}>{t('requestDataFromFamily')}</Text>
-            </View>
-            <Text style={styles.requestEntryArrow}>›</Text>
-          </Pressable>
+        <View style={styles.hero}>
+          <Text style={styles.title}>{t('topUpHaiti')}</Text>
+          <Text style={styles.subtitle}>{t('chooseAirtimeOrAnInternetBundle')}</Text>
         </View>
-      ) : flowMode === 'send' ? (
+
         <View style={styles.flowStack}>
-          <ProgressIndicator step={Math.min(sendStep, 5)} />
+          <ProgressIndicator step={sendStep} />
           <View style={styles.flowHeader}>
             <View style={styles.flowHeaderText}>
               <Text style={styles.flowLabel}>{sendStepLabel}</Text>
-              <Text style={styles.flowTitle}>
-                {sendStep === 2
-                  ? 'Choose a carrier'
-                  : sendStep === 3
-                    ? sendProductType === 'airtime' ? 'Choose your amount' : 'Choose your data bundle'
-                    : sendStep === 4
-                      ? 'Who are you sending this to?'
-                      : sendStep === 5 ? 'Review your top up' : 'Complete payment'}
-              </Text>
+              <Text style={styles.flowTitle}>{t('topUpHaiti')}</Text>
+              <Text style={styles.flowSubtitle}>{t('chooseAirtimeOrAnInternetBundle')}</Text>
             </View>
-            <Pressable onPress={() => sendStep === 2 ? resetAllFlows() : setSendStep((sendStep - 1) as SendStep)} style={styles.changeFlowButton}>
-              <Text style={styles.changeFlowText}>Back</Text>
-            </Pressable>
           </View>
 
-          {sendStep === 2 ? (
-            <View style={styles.carrierGrid}>
-              {carrierOptions.map((carrier) => (
-                <CarrierCard key={carrier} carrier={carrier} onPress={() => { changeSendCarrier(carrier); setSendStep(3); }} />
-              ))}
-            </View>
-          ) : null}
-
-          {sendStep === 3 ? (
-            <View style={styles.sectionStack}>
-              <View style={styles.productGrid}>
-                {sendProducts.length ? sendProducts.map((product) => (
-                  <TopUpAmountCard key={product.id} product={product} selected={product.id === selectedSendProductId}
-                    onPress={() => { setSelectedSendProductId(product.id); setSendError(null); }} />
-                )) : <Text style={styles.emptyText}>{t('noResultsFound')}</Text>}
-              </View>
-              <PrimaryButton label={t('continue')} onPress={() => setSendStep(4)} disabled={!selectedSendProduct} />
-            </View>
-          ) : null}
-
-          {sendStep === 4 ? (
-            <View style={styles.premiumPanel}>
+          {sendStep === 1 ? (
+            <SectionCard title={t('chooseProduct')} subtitle={t('chooseAirtimeOrAnInternetBundle')}>
               <View style={styles.sectionStack}>
-                {isSignedIn ? (
-                  <SavedRecipientsPicker
-                    title={t('savedRecipients')}
-                    subtitle={t('chooseSavedRecipient')}
-                    recipients={savedRecipients}
-                    loading={savedRecipientsLoading}
-                    selectedRecipientId={sendSelectedRecipientId}
-                    onSelect={selectSendRecipient}
-                  />
-                ) : null}
                 <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>{t('recipientName')} (optional)</Text>
                   <TextInput
-                    value={sendRecipientName}
-                    onChangeText={(value) => {
-                      setSendRecipientName(value);
-                      setSendSelectedRecipientId(null);
-                    }}
-                    placeholder={t('recipientName')}
+                    value={productSearch}
+                    onChangeText={setProductSearch}
+                    placeholder={t('searchProducts')}
                     placeholderTextColor={Colors.light.muted}
-                    autoCapitalize="words"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    clearButtonMode="while-editing"
                     style={styles.input}
                   />
                 </View>
-                <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>{t('phoneNumber')}</Text>
-                  <View style={styles.phoneInputRow}>
-                    <View style={styles.countryCode}><Text style={styles.countryCodeText}>+509</Text></View>
-                    <TextInput
-                      value={sendPhoneNumber}
-                      onChangeText={(value) => {
-                        setSendPhoneNumber(value);
-                      setSendSelectedRecipientId(null);
-                        setSendError(null);
-                      }}
-                      placeholder="34 12 44 11"
-                      placeholderTextColor={Colors.light.muted}
-                      keyboardType="phone-pad"
-                      textContentType="telephoneNumber"
-                      style={[styles.input, styles.phoneInput]}
-                    />
-                  </View>
-                </View>
-                {isSignedIn ? (
-                  <RecipientSaveToggle
-                    checked={sendSaveRecipient}
-                    label={t('saveThisRecipient')}
-                    onToggle={() => setSendSaveRecipient((current) => !current)}
-                  />
-                ) : null}
-                {sendRecipientMessage ? <Text style={styles.noteText}>{sendRecipientMessage}</Text> : null}
-                <PrimaryButton
-                  label={t('continue')}
-                  onPress={() => setSendStep(5)}
-                  disabled={!sendPhoneNumber.trim()}
+                <ChipSelector
+                  value={productFilter}
+                  options={productFilterOptions}
+                  onChange={setProductFilter}
+                  renderLabel={renderProductFilterLabel}
                 />
-              </View>
-            </View>
-          ) : null}
-
-          {sendStep === 5 ? (
-            <View style={styles.sectionStack}>
-              <View style={styles.summaryCard}>
-                {sendReviewSummary.filter((row) => row.label !== t('orderType') && row.label !== t('recipientName')).map((row) => (
-                  <SummaryRow key={row.label} label={row.label} value={row.value} strong={row.strong} />
-                ))}
-              </View>
-              {!isSignedIn ? (
-                <>
-                  <Text style={styles.warningText}>{t('signInRequiredBeforeTopUpOrder')}</Text>
-                  <PrimaryButton label={t('goToAccount')} onPress={() => router.push('/account')} />
-                </>
-              ) : (
-                <>
-                  {sendError ? <Text style={styles.errorText}>{sendError}</Text> : null}
-                  <PrimaryButton label="Continue to payment" onPress={confirmSendOrder} disabled={sendSubmitting || !selectedSendProduct} />
-                </>
-              )}
-            </View>
-          ) : null}
-
-          {sendStep === 6 ? (
-            <SectionCard title={t('completePayment')} subtitle={t('paySecurelyToCompleteOrder')}>
-              <View style={styles.sectionStack}>
-                <Text style={styles.bodyText}>{t('onlinePaymentWillBeConnectedSoon')}</Text>
-                {sendOrder ? (
-                  <View style={styles.summaryCard}>
-                    <SummaryRow label={t('orderType')} value={t('topUpOrder')} />
-                    <SummaryRow label={t('recipientName')} value={sendOrder.recipientName ?? '—'} />
-                    <SummaryRow label={t('phoneNumber')} value={sendOrder.recipientPhone} />
-                    <SummaryRow label={t('carrier')} value={sendOrder.carrier} />
-                    <SummaryRow label={t('product')} value={sendOrder.productName} />
-                    <SummaryRow label={t('serviceTotal')} value={formatServiceTotal(sendOrder.totalUsd)} strong />
-                    <SummaryRow label={t('status')} value={t('pendingPayment')} />
-                  </View>
-                ) : null}
-                <Text style={styles.noteText}>{t('pendingPayment')}</Text>
-                {sendRecipientMessage ? <Text style={styles.noteText}>{sendRecipientMessage}</Text> : null}
-                <PrimaryButton label={t('continueToPayment')} onPress={handleSendPaymentComingSoon} />
-                <Pressable accessibilityRole="button" onPress={() => router.push('/account')} style={styles.secondaryActionButton}>
-                  <Text style={styles.secondaryActionText}>{t('viewActivity')}</Text>
-                </Pressable>
-                {sendPaymentNotice ? <Text style={styles.noteText}>{sendPaymentNotice}</Text> : null}
-              </View>
-            </SectionCard>
-          ) : null}
-        </View>
-      ) : (
-        <View style={styles.flowStack}>
-          <View style={styles.flowHeader}>
-            <View style={styles.flowHeaderText}>
-              <Text style={styles.flowLabel}>{requestStepLabel}</Text>
-              <Text style={styles.flowTitle}>{t('requestDataFromFamily')}</Text>
-              <Text style={styles.flowSubtitle}>{t('requestData')}</Text>
-            </View>
-            <Pressable
-              onPress={requestStep === 5 ? editRequest : resetAllFlows}
-              style={styles.changeFlowButton}>
-              <Text style={styles.changeFlowText}>{requestStep === 5 ? t('editRequest') : t('changeFlow')}</Text>
-            </Pressable>
-          </View>
-
-          {requestStep === 1 ? (
-            <SectionCard title={t('chooseCarrier')} subtitle={t('chooseCarrier')}>
-              <View style={styles.sectionStack}>
-                <ChipSelector value={requestCarrier} options={carrierOptions} onChange={changeRequestCarrier} />
-                    <PrimaryButton label={t('continue')} onPress={() => setRequestStep(2)} />
-              </View>
-            </SectionCard>
-          ) : null}
-
-          {requestStep === 2 ? (
-            <SectionCard title={t('chooseDataPackage')} subtitle={t('chooseDataPackage')}>
-              <View style={styles.sectionStack}>
                 <View style={styles.productGrid}>
-                  {requestProducts.length ? (
-                    requestProducts.map((product) => (
+                  {filteredSendProducts.length ? (
+                    filteredSendProducts.map((product) => (
                       <TopUpAmountCard
                         key={product.id}
                         product={product}
-                        selected={product.id === selectedRequestProductId}
+                        selected={product.id === selectedSendProductId}
                         onPress={() => {
-                          setSelectedRequestProductId(product.id);
-                          setRequestError(null);
+                          setSelectedSendProductId(product.id);
+                          setSendError(null);
+                          setSendPaymentNotice(null);
+                          setSendStep(2);
                         }}
                       />
                     ))
+                  ) : productsLoading ? (
+                    <Text style={styles.emptyText}>Loading products...</Text>
+                  ) : activeSendProducts.length === 0 ? (
+                    <Text style={styles.emptyText}>
+                      Product is not ready for checkout. Please refresh and try again.
+                    </Text>
                   ) : (
-                    <Text style={styles.emptyText}>{t('noResultsFound')}</Text>
+                    <Text style={styles.emptyText}>{t('noMatchingProducts')}</Text>
                   )}
                 </View>
-                <PrimaryButton label={t('continue')} onPress={() => setRequestStep(3)} disabled={!selectedRequestProduct} />
               </View>
             </SectionCard>
           ) : null}
 
-          {requestStep === 3 ? (
+          {sendStep === 2 ? (
             <SectionCard title={t('enterHaitiPhoneNumber')} subtitle={t('enterHaitiPhoneNumber')}>
               <View style={styles.sectionStack}>
-                {isSignedIn ? (
-                  <SavedRecipientsPicker
-                    title={t('savedRecipients')}
-                    subtitle={t('chooseSavedRecipient')}
-                    recipients={savedRecipients}
-                    loading={savedRecipientsLoading}
-                    selectedRecipientId={requestSelectedRecipientId}
-                    onSelect={selectRequestRecipient}
-                  />
-                ) : null}
                 <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>{t('recipientName')}</Text>
                   <TextInput
-                    value={requestRecipientName}
-                    onChangeText={(value) => {
-                      setRequestRecipientName(value);
-                      setRequestSelectedRecipientId(null);
-                    }}
-                    placeholder={t('recipientName')}
+                    value={sendPhoneNumber}
+                          onChangeText={(value) => {
+                            setSendPhoneNumber(value);
+                            setSendError(null);
+                            setSendPaymentNotice(null);
+                          }}
+                    placeholder="+509 34 12 34 56"
                     placeholderTextColor={Colors.light.muted}
-                    autoCapitalize="words"
+                    keyboardType="phone-pad"
+                    textContentType="telephoneNumber"
                     style={styles.input}
-                  />
-                </View>
-                <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>{t('phoneNumber')}</Text>
-                <TextInput
-                  value={requestPhoneNumber}
-                  onChangeText={(value) => {
-                    setRequestPhoneNumber(value);
-                      setRequestSelectedRecipientId(null);
-                    setRequestError(null);
-                  }}
-                  placeholder="e.g. (509) 34-12-44-11"
-                  placeholderTextColor={Colors.light.muted}
-                  keyboardType="phone-pad"
-                  textContentType="telephoneNumber"
-                  style={styles.input}
-                />
-                </View>
-                {isSignedIn ? (
-                  <RecipientSaveToggle
-                    checked={requestSaveRecipient}
-                    label={t('saveThisRecipient')}
-                    onToggle={() => setRequestSaveRecipient((current) => !current)}
-                  />
+                        />
+                        {sendPhoneError ? <Text style={styles.errorText}>{sendPhoneError}</Text> : null}
+                      </View>
+                      {sendPhoneNumber.trim() ? (
+                        detectedSendCarrier ? (
+                    <View style={styles.carrierConfirmationRow}>
+                      <View style={styles.carrierConfirmationText}>
+                        <Text style={styles.inputLabel}>{`${t('carrierDetected')}: ${detectedSendCarrier}`}</Text>
+                      </View>
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() => {
+                          setSendCarrier(null);
+                          setSendCarrierManual(true);
+                        }}
+                        style={styles.carrierChangeButton}>
+                        <Text style={styles.carrierChangeText}>{t('change')}</Text>
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <View style={styles.carrierPromptBlock}>
+                      <Text style={styles.inputLabel}>{t('confirmCarrier')}</Text>
+                      <Text style={styles.noteText}>{t('carrierCouldNotBeDetected')}</Text>
+                    </View>
+                  )
                 ) : null}
-                {requestRecipientMessage ? <Text style={styles.noteText}>{requestRecipientMessage}</Text> : null}
-                <PrimaryButton
-                  label={t('continue')}
-                  onPress={() => setRequestStep(4)}
-                  disabled={!requestPhoneNumber.trim()}
-                />
+                <ChipSelector value={sendCarrier} options={carrierOptions} onChange={changeSendCarrier} />
+                {carrierMismatch ? (
+                  <Text style={styles.warningText}>
+                    {t('productCarrierMismatch', {
+                      productCarrier: selectedSendProduct?.carrier ?? '',
+                      detectedCarrier: detectedSendCarrier ?? confirmedSendCarrier ?? '',
+                    })}
+                  </Text>
+                ) : null}
+                {sendProductSelectionInvalid ? (
+                  <Text style={styles.errorText}>
+                    Product is not ready for checkout. Please refresh and try again.
+                  </Text>
+                ) : null}
+                <View style={styles.actionRow}>
+                  <PrimaryButton
+                    label={t('backWithArrow')}
+                    onPress={() => setSendStep(1)}
+                    style={styles.actionButtonFlex}
+                  />
+                        <PrimaryButton
+                          label={t('continueWithArrow')}
+                          onPress={() => setSendStep(3)}
+                          disabled={!sendPhoneValid || !selectedSendProduct || !confirmedSendCarrier || carrierMismatch}
+                          style={styles.actionButtonFlex}
+                        />
+                      </View>
               </View>
             </SectionCard>
           ) : null}
 
-          {requestStep === 4 ? (
-            <SectionCard title={t('completeThisDataRequest')} subtitle={t('reviewBeforePayment')}>
+          {sendStep === 3 ? (
+            <SectionCard title={t('reviewAndPay')} subtitle={t('reviewAndPaySubtitle')}>
               <View style={styles.sectionStack}>
                 <View style={styles.summaryCard}>
-                  {requestReviewSummary.map((row) => (
+                  {sendReviewSummary.map((row) => (
                     <SummaryRow key={row.label} label={row.label} value={row.value} strong={row.strong} />
                   ))}
                 </View>
-                {requestEditNote ? <Text style={styles.editNoteText}>{requestEditNote}</Text> : null}
-                {!isSignedIn ? (
-                  <>
-                    <Text style={styles.warningText}>{t('signInRequiredBeforeRequestLink')}</Text>
-                    <PrimaryButton label={t('goToAccount')} onPress={() => router.push('/account')} />
-                  </>
-                ) : (
-                  <>
-                    {requestError ? <Text style={styles.errorText}>{requestError}</Text> : null}
-                    <PrimaryButton
-                      label={t('continueToPayment')}
-                      onPress={createRequest}
-                      disabled={requestBusy || !selectedRequestProduct}
-                    />
-                  </>
-                )}
-              </View>
-            </SectionCard>
-          ) : null}
-
-          {requestStep === 5 ? (
-            <SectionCard title={t('completeThisDataRequest')} subtitle={t('reviewBeforePayment')}>
-              <View style={styles.sectionStack}>
-                <Text style={styles.bodyText}>
-                  {t('reviewBeforePayment')}
-                </Text>
-                {requestLink ? <Text style={styles.linkText}>{requestLink}</Text> : null}
-                {requestStatus ? <Text style={styles.noteText}>{requestStatus}</Text> : null}
-                {requestRecipientMessage ? <Text style={styles.noteText}>{requestRecipientMessage}</Text> : null}
-                {requestPaymentNotice ? <Text style={styles.noteText}>{requestPaymentNotice}</Text> : null}
-                <Text style={styles.editNoteText}>{t('onlinePaymentWillBeConnectedSoon')}</Text>
-                <View style={styles.shareGrid}>
-                  <SharePill label={t('whatsapp')} onPress={() => setRequestStatus('WhatsApp share placeholder.')} />
-                  <SharePill label={t('sms')} onPress={() => setRequestStatus('SMS share placeholder.')} />
-                  <SharePill label={t('messenger')} onPress={() => setRequestStatus('Messenger share placeholder.')} />
-                  <SharePill label={t('copyLink')} onPress={handleCopyLink} />
+                {sendError ? <Text style={styles.errorText}>{sendError}</Text> : null}
+                {sendPaymentNotice ? <Text style={styles.noteText}>{sendPaymentNotice}</Text> : null}
+                <View style={styles.actionRow}>
+                  <PrimaryButton
+                    label={t('backWithArrow')}
+                    onPress={() => setSendStep(2)}
+                    style={styles.actionButtonFlex}
+                  />
+                  <PrimaryButton
+                    label={t('continueToPaymentWithArrow')}
+                    onPress={() => void confirmSendOrder()}
+                    disabled={sendSubmitting || !selectedSendProduct || !sendPhoneValid || !confirmedSendCarrier || carrierMismatch}
+                    style={styles.actionButtonFlex}
+                  />
                 </View>
-                <PrimaryButton label={t('completePayment')} onPress={handleRequestPaymentComingSoon} />
-                <PrimaryButton label={t('createAnotherRequestButton')} onPress={createAnotherRequest} />
               </View>
             </SectionCard>
           ) : null}
         </View>
-      )}
       </ScrollView>
+
+      <Modal visible={requestModalVisible} transparent animationType="slide" onRequestClose={() => router.replace('/topup')}>
+        <View style={styles.requestModalOverlay}>
+          <View style={styles.requestModalSheet}>
+            <ScrollView contentContainerStyle={styles.requestModalContainer} showsVerticalScrollIndicator={false}>
+              <View style={styles.flowStack}>
+                <View style={styles.flowHeader}>
+                  <View style={styles.flowHeaderText}>
+                    <Text style={styles.flowLabel}>{requestStepLabel}</Text>
+                    <Text style={styles.flowTitle}>{t('requestSocialData')}</Text>
+                    <Text style={styles.flowSubtitle}>{t('createLinkFamilyCanPay')}</Text>
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => router.replace('/topup')}
+                    style={styles.modalHeaderCloseButton}>
+                    <Text style={styles.modalHeaderCloseText}>{t('close')}</Text>
+                  </Pressable>
+                </View>
+
+                {requestStep === 1 ? (
+                  <SectionCard title={t('chooseCarrier')} subtitle={t('chooseCarrier')}>
+                    <View style={styles.sectionStack}>
+                      <ChipSelector value={requestCarrier} options={carrierOptions} onChange={changeRequestCarrier} />
+                      <View style={styles.actionRow}>
+                        <PrimaryButton
+                          label={t('backWithArrow')}
+                          onPress={() => router.replace('/topup')}
+                          style={styles.actionButtonFlex}
+                        />
+                        <PrimaryButton
+                          label={t('continueWithArrow')}
+                          onPress={() => setRequestStep(2)}
+                          style={styles.actionButtonFlex}
+                        />
+                      </View>
+                    </View>
+                  </SectionCard>
+                ) : null}
+
+                {requestStep === 2 ? (
+                  <SectionCard title={t('socialData')} subtitle={t('chooseSocialDataProducts')}>
+                    <View style={styles.sectionStack}>
+                      <View style={styles.inputGroup}>
+                        <TextInput
+                          value={requestProductSearch}
+                          onChangeText={setRequestProductSearch}
+                          placeholder={t('searchProducts')}
+                          placeholderTextColor={Colors.light.muted}
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                          clearButtonMode="while-editing"
+                          style={styles.input}
+                        />
+                      </View>
+                      <View style={styles.productGrid}>
+                        {filteredRequestProducts.length ? (
+                          filteredRequestProducts.map((product) => (
+                            <TopUpAmountCard
+                              key={product.id}
+                              product={product}
+                              selected={product.id === selectedRequestProductId}
+                              onPress={() => {
+                                setSelectedRequestProductId(product.id);
+                                setRequestCarrier(product.carrier);
+                                setRequestError(null);
+                                setRequestStep(3);
+                              }}
+                            />
+                          ))
+                        ) : (
+                          <Text style={styles.emptyText}>{t('noMatchingProducts')}</Text>
+                        )}
+                      </View>
+                    </View>
+                  </SectionCard>
+                ) : null}
+
+                {requestStep === 3 ? (
+                  <SectionCard title={t('enterHaitiPhoneNumber')} subtitle={t('enterHaitiPhoneNumber')}>
+                    <View style={styles.sectionStack}>
+                      <View style={styles.inputGroup}>
+                        <Text style={styles.inputLabel}>{t('phoneNumber')}</Text>
+                        <TextInput
+                          value={requestPhoneNumber}
+                          onChangeText={(value) => {
+                            setRequestPhoneNumber(value);
+                            setRequestSelectedRecipientId(null);
+                            setRequestError(null);
+                          }}
+                          placeholder="e.g. (509) 34-12-44-11"
+                          placeholderTextColor={Colors.light.muted}
+                          keyboardType="phone-pad"
+                          textContentType="telephoneNumber"
+                          style={styles.input}
+                        />
+                        {requestPhoneError ? <Text style={styles.errorText}>{requestPhoneError}</Text> : null}
+                      </View>
+                      {requestRecipientMessage ? <Text style={styles.noteText}>{requestRecipientMessage}</Text> : null}
+                      <View style={styles.actionRow}>
+                        <PrimaryButton
+                          label={t('backWithArrow')}
+                          onPress={() => setRequestStep(2)}
+                          style={styles.actionButtonFlex}
+                        />
+                        <PrimaryButton
+                          label={t('continueWithArrow')}
+                          onPress={() => setRequestStep(4)}
+                          disabled={!requestPhoneValid}
+                          style={styles.actionButtonFlex}
+                        />
+                      </View>
+                    </View>
+                  </SectionCard>
+                ) : null}
+
+                {requestStep === 4 ? (
+                  <SectionCard title={t('reviewRequest')} subtitle={t('familyReviewBeforeContinuing')}>
+                    <View style={styles.sectionStack}>
+                      <View style={styles.summaryCard}>
+                        {requestReviewSummary.map((row) => (
+                          <SummaryRow key={row.label} label={row.label} value={row.value} strong={row.strong} />
+                        ))}
+                      </View>
+                      {requestEditNote ? <Text style={styles.editNoteText}>{requestEditNote}</Text> : null}
+                      {!isSignedIn ? (
+                        <>
+                          <Text style={styles.warningText}>{t('signInRequiredBeforeRequestLink')}</Text>
+                          <PrimaryButton label={t('goToAccount')} onPress={() => router.push('/account')} />
+                        </>
+                      ) : (
+                        <>
+                          {requestError ? <Text style={styles.errorText}>{requestError}</Text> : null}
+                          <View style={styles.actionRow}>
+                            <PrimaryButton
+                              label={t('backWithArrow')}
+                              onPress={() => setRequestStep(3)}
+                              style={styles.actionButtonFlex}
+                            />
+                            <PrimaryButton
+                              label={t('createRequestLink')}
+                              onPress={createRequest}
+                              disabled={requestBusy || !selectedRequestProduct || !requestPhoneValid}
+                              style={styles.actionButtonFlex}
+                            />
+                          </View>
+                        </>
+                      )}
+                    </View>
+                  </SectionCard>
+                ) : null}
+
+                {requestStep === 5 ? (
+                  <SectionCard title={t('requestLinkCreated')} subtitle={t('requestLinkCreatedSubtitle')}>
+                    <View style={styles.sectionStack}>
+                      <Text style={styles.bodyText}>{t('requestLinkReadyShare')}</Text>
+                      {requestLink ? <Text style={styles.linkText}>{requestLink}</Text> : null}
+                      {requestStatus ? <Text style={styles.noteText}>{requestStatus}</Text> : null}
+                      {requestRecipientMessage ? <Text style={styles.noteText}>{requestRecipientMessage}</Text> : null}
+                      {requestPaymentNotice ? <Text style={styles.noteText}>{requestPaymentNotice}</Text> : null}
+                      <Text style={styles.editNoteText}>{t('onlinePaymentWillBeConnectedSoon')}</Text>
+                      <View style={styles.shareGrid}>
+                        <SharePill label={t('whatsapp')} onPress={() => setRequestStatus('WhatsApp share placeholder.')} />
+                        <SharePill label={t('sms')} onPress={() => setRequestStatus('SMS share placeholder.')} />
+                        <SharePill label={t('messenger')} onPress={() => setRequestStatus('Messenger share placeholder.')} />
+                        <SharePill label={t('copyLink')} onPress={handleCopyLink} />
+                      </View>
+                      <PrimaryButton label={t('copyLink')} onPress={handleCopyLink} />
+                      <PrimaryButton label={t('createAnotherRequestButton')} onPress={createAnotherRequest} />
+                    </View>
+                  </SectionCard>
+                ) : null}
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </>
   );
 }
 
-function ProductTypeCard({
+function FlowChoiceCard({
+  eyebrow,
   title,
   body,
-  image,
   onPress,
 }: {
+  eyebrow: string;
   title: string;
   body: string;
-  image: ImageSourcePropType;
   onPress: () => void;
 }) {
   return (
     <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.choiceCard, pressed && styles.choiceCardPressed]}>
-      <Image source={image} style={styles.choiceImage} resizeMode="cover" />
-      <View style={styles.choiceCopy}>
-        <Text style={styles.choiceTitle}>{title}</Text>
-        <Text style={styles.choiceBody}>{body}</Text>
-      </View>
-      <View style={styles.choiceArrow}><Text style={styles.choiceArrowText}>›</Text></View>
-    </Pressable>
-  );
-}
-
-function CarrierCard({ carrier, onPress }: { carrier: TopUpCarrier; onPress: () => void }) {
-  return (
-    <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.carrierCard, pressed && styles.choiceCardPressed]}>
-      <View style={[styles.carrierLogo, carrier === 'Digicel' ? styles.digicelLogo : styles.natcomLogo]}>
-        <Text style={styles.carrierLogoText}>{carrier.slice(0, 1)}</Text>
-      </View>
-      <View style={styles.choiceCopy}>
-        <Text style={styles.choiceTitle}>{carrier}</Text>
-        <Text style={styles.choiceBody}>Haiti mobile network</Text>
-      </View>
-      <View style={styles.choiceArrow}><Text style={styles.choiceArrowText}>›</Text></View>
+      <Text style={styles.choiceEyebrow}>{eyebrow}</Text>
+      <Text style={styles.choiceTitle}>{title}</Text>
+      <Text style={styles.choiceBody}>{body}</Text>
     </Pressable>
   );
 }
 
 function ProgressIndicator({ step }: { step: number }) {
   return (
-    <View accessibilityRole="progressbar" accessibilityValue={{ min: 1, max: 5, now: step }} style={styles.progressTrack}>
-      <View style={[styles.progressFill, { width: `${step * 20}%` }]} />
+    <View accessibilityRole="progressbar" accessibilityValue={{ min: 1, max: 3, now: step }} style={styles.progressTrack}>
+      <View style={[styles.progressFill, { width: `${(step / 3) * 100}%` }]} />
     </View>
   );
 }
@@ -1139,22 +1192,71 @@ function SharePill({ label, onPress }: { label: string; onPress: () => void }) {
   );
 }
 
-function renderSendProductType(value: SendProductType) {
-  return value === 'airtime' ? 'Airtime / Phone Credit' : 'Mobile Data';
-}
-
-function getProductName(carrier: TopUpCarrier, productType: SendProductType, product: TopUpProduct) {
-  if (productType === 'airtime') {
-    return `${carrier} Airtime ${product.label}`;
+function renderProductFilterLabel(value: ProductFilter) {
+  if (value === 'All') {
+    return t('all');
   }
 
-  return `${carrier} Data ${product.label}`;
+  return value === 'airtime' ? t('airtime') : t('socialData');
+}
+
+function renderProductTypeLabel(value: SendProductType) {
+  return value === 'airtime' ? t('airtime') : t('socialData');
+}
+
+function dedupeAirtimeProducts(products: TopUpProduct[]) {
+  const seenAirtimeAmounts = new Set<number>();
+  const nextProducts: TopUpProduct[] = [];
+
+  for (const product of products) {
+    if (product.productType !== 'airtime') {
+      nextProducts.push(product);
+      continue;
+    }
+
+    if (seenAirtimeAmounts.has(product.amountUsd)) {
+      continue;
+    }
+
+    seenAirtimeAmounts.add(product.amountUsd);
+    nextProducts.push(product);
+  }
+
+  return nextProducts;
+}
+
+function resolveSelectedTopUpProduct(
+  products: TopUpProduct[],
+  selectedProduct: TopUpProduct | null,
+  confirmedCarrier: TopUpCarrier | null
+) {
+  if (!selectedProduct || selectedProduct.productType !== 'airtime' || !confirmedCarrier) {
+    return selectedProduct;
+  }
+
+  return (
+    products.find(
+      (product) =>
+        product.active &&
+        product.productType === 'airtime' &&
+        product.carrier === confirmedCarrier &&
+        product.amountUsd === selectedProduct.amountUsd
+    ) ?? selectedProduct
+  );
 }
 
 function modeSubtitle(mode: UserMode) {
   return mode === 'diaspora_supporter'
     ? 'Diaspora Supporter mode keeps the focus on family support.'
     : 'Haiti User mode keeps the focus on requests and results.';
+}
+
+function formatCurrency(value: number) {
+  return Number.isInteger(value) ? `$${value}` : `$${value.toFixed(2)}`;
+}
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 const styles = StyleSheet.create({
@@ -1193,6 +1295,60 @@ const styles = StyleSheet.create({
     color: Colors.light.textSecondary,
     fontWeight: '600',
   },
+  carrierConfirmationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+  },
+  carrierConfirmationText: {
+    flex: 1,
+  },
+  carrierPromptBlock: {
+    gap: 4,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+  },
+  carrierChangeButton: {
+    paddingHorizontal: 0,
+    paddingVertical: 4,
+  },
+  carrierChangeText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: Colors.light.text,
+    fontWeight: '600',
+  },
+  backButton: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 0,
+    paddingVertical: 4,
+  },
+  backButtonText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: Colors.light.text,
+    fontWeight: '600',
+  },
+  actionRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    alignItems: 'center',
+  },
+  actionButtonFlex: {
+    flex: 1,
+    width: 'auto',
+  },
   editNoteText: {
     fontSize: 13,
     lineHeight: 18,
@@ -1223,31 +1379,26 @@ const styles = StyleSheet.create({
     color: Colors.light.textSecondary,
   },
   entryGrid: {
-    gap: Spacing.md,
+    gap: Spacing.sm,
   },
   choiceCard: {
-    minHeight: 112,
-    padding: Spacing.sm,
+    padding: Spacing.lg,
     borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.light.border,
-    backgroundColor: Colors.light.surface,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
+    backgroundColor: Colors.light.background,
+    gap: 6,
   },
   choiceCardPressed: {
     opacity: 0.92,
   },
-  choiceImage: {
-    width: 88,
-    height: 88,
-    borderRadius: Radius.md,
-    backgroundColor: Colors.light.surfaceAlt,
-  },
-  choiceCopy: {
-    flex: 1,
-    gap: 4,
+  choiceEyebrow: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    color: Colors.light.textSecondary,
   },
   choiceTitle: {
     fontSize: 18,
@@ -1260,57 +1411,8 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: Colors.light.textSecondary,
   },
-  choiceArrow: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.light.gold,
-  },
-  choiceArrowText: {
-    color: Colors.light.surface,
-    fontSize: 28,
-    lineHeight: 30,
-    fontWeight: '500',
-    marginTop: -2,
-  },
-  requestEntry: {
-    minHeight: 72,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    backgroundColor: Colors.light.surface,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-  },
-  requestEntryCopy: {
-    flex: 1,
-    gap: 2,
-  },
-  requestEntryTitle: {
-    fontSize: 15,
-    lineHeight: 20,
-    fontWeight: '700',
-    color: Colors.light.text,
-  },
-  requestEntryBody: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: Colors.light.textSecondary,
-  },
-  requestEntryArrow: {
-    fontSize: 26,
-    color: Colors.light.gold,
-  },
   flowStack: {
     gap: Spacing.md,
-  },
-  stepHeading: {
-    gap: 6,
   },
   progressTrack: {
     height: 3,
@@ -1333,6 +1435,17 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 4,
   },
+  modalHeaderCloseButton: {
+    paddingHorizontal: 0,
+    paddingVertical: 4,
+    marginTop: 2,
+  },
+  modalHeaderCloseText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: Colors.light.text,
+    fontWeight: '600',
+  },
   flowLabel: {
     fontSize: 12,
     lineHeight: 16,
@@ -1350,16 +1463,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     color: Colors.light.textSecondary,
-  },
-  changeFlowButton: {
-    paddingHorizontal: 0,
-    paddingVertical: 4,
-  },
-  changeFlowText: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: Colors.light.text,
-    fontWeight: '600',
   },
   modalOverlay: {
     flex: 1,
@@ -1413,48 +1516,26 @@ const styles = StyleSheet.create({
     color: Colors.light.textSecondary,
     fontWeight: '600',
   },
+  requestModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(17, 24, 39, 0.48)',
+    justifyContent: 'flex-end',
+  },
+  requestModalSheet: {
+    maxHeight: '92%',
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    backgroundColor: Colors.light.background,
+    overflow: 'hidden',
+  },
+  requestModalContainer: {
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.xxl,
+    gap: Spacing.md,
+  },
   sectionStack: {
     gap: Spacing.sm,
-  },
-  carrierGrid: {
-    gap: Spacing.md,
-  },
-  carrierCard: {
-    minHeight: 92,
-    padding: Spacing.md,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    backgroundColor: Colors.light.surface,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-  },
-  carrierLogo: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  digicelLogo: {
-    backgroundColor: '#D9272E',
-  },
-  natcomLogo: {
-    backgroundColor: '#1769AA',
-  },
-  carrierLogoText: {
-    color: '#FFFFFF',
-    fontSize: 22,
-    lineHeight: 28,
-    fontWeight: '800',
-  },
-  premiumPanel: {
-    padding: Spacing.md,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    backgroundColor: Colors.light.surface,
   },
   inputGroup: {
     gap: 6,
@@ -1475,29 +1556,6 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 16,
     color: Colors.light.text,
-  },
-  phoneInputRow: {
-    flexDirection: 'row',
-    gap: Spacing.xs,
-  },
-  countryCode: {
-    minWidth: 72,
-    minHeight: 48,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    backgroundColor: Colors.light.surfaceAlt,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  countryCodeText: {
-    color: Colors.light.text,
-    fontSize: 15,
-    lineHeight: 20,
-    fontWeight: '700',
-  },
-  phoneInput: {
-    flex: 1,
   },
   productGrid: {
     flexDirection: 'row',

@@ -54,7 +54,9 @@ export default function HomeScreen() {
           <ServiceCard
             key={service.title}
             {...service}
-            onPress={() => router.push('/topup')}
+            onPress={() => router.push(service.kind === 'request'
+              ? { pathname: '/topup', params: { mode: 'request' } }
+              : '/topup')}
           />
         ))}
       </View>
