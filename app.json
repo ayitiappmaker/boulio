@@ -30,7 +30,8 @@
         {
           "backgroundColor": "#F7F8FA",
           "image": "./assets/images/branding/boulio-splash.png",
-          "imageWidth": 112
+          "imageWidth": 96,
+          "resizeMode": "contain"
         }
       ],
       "expo-status-bar"
