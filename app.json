@@ -42,8 +42,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "1d44864c-03dc-4a19-ae0c-8e4c475367a3"
+        "projectId": "49c77474-b657-4e17-988e-4664c28f61a1"
       }
-    }
+    },
+    "owner": "makandal26"
   }
 }
