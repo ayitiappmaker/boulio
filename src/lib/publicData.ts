@@ -61,7 +61,7 @@ export async function fetchLotteryResults(filters: LotteryResultsFilters = {}): 
 
 export async function fetchActiveTopUpProducts(): Promise<TopUpProduct[]> {
   if (!isSupabaseConfigured || !supabase) {
-    return topUpProducts;
+    return __DEV__ ? topUpProducts : [];
   }
 
   try {
@@ -83,7 +83,7 @@ export async function fetchActiveTopUpProducts(): Promise<TopUpProduct[]> {
     return rows.map(mapTopUpProductRow);
   } catch (error) {
     reportFallback('top-up products', error);
-    return topUpProducts;
+    return __DEV__ ? topUpProducts : [];
   }
 }
 

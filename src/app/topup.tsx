@@ -1,5 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Linking, Modal, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Linking,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 
@@ -29,6 +41,8 @@ import {
 import type { Session } from '@supabase/supabase-js';
 import type { TopUpCarrier, TopUpProduct, UserMode } from '@/lib/types';
 import { analyticsCarrier, trackAnalyticsEvent } from '@/lib/analytics';
+import { isSupabaseConfigured } from '@/lib/supabase';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type SendStep = 1 | 2 | 3;
 type RequestStep = 1 | 2 | 3 | 4;
@@ -46,10 +60,11 @@ const emptyProfileForm: ProfileFormValues = {
 
 export default function TopUpScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ mode?: string | string[] }>();
   useLanguage();
   const [session, setSession] = useState<Session | null>(null);
-  const [products, setProducts] = useState<TopUpProduct[]>(mockTopUpProducts);
+  const [products, setProducts] = useState<TopUpProduct[]>(() => (__DEV__ ? mockTopUpProducts : []));
   const [productsLoading, setProductsLoading] = useState(true);
   const [savedRecipients, setSavedRecipients] = useState<SavedRecipientRecord[]>([]);
   const [savedRecipientsLoading, setSavedRecipientsLoading] = useState(false);
@@ -109,7 +124,7 @@ export default function TopUpScreen() {
       })
       .catch(() => {
         if (active) {
-          setProducts(mockTopUpProducts);
+          setProducts(__DEV__ ? mockTopUpProducts : []);
         }
       })
       .finally(() => {
@@ -772,6 +787,9 @@ export default function TopUpScreen() {
           {sendStep === 2 ? (
             <SectionCard title={sendProductType === 'airtime' ? 'Choose phone credit' : 'Choose a data bundle'} subtitle={`Plans for ${confirmedSendCarrier ?? 'this number'}`}>
               <View style={styles.sectionStack}>
+                <Pressable accessibilityRole="button" onPress={() => setSendStep(1)} style={styles.backButton}>
+                  <Text style={styles.backButtonText}>{t('backWithArrow')}</Text>
+                </Pressable>
                 <View style={styles.inputGroup}>
                   <TextInput
                     value={productSearch}
@@ -808,10 +826,12 @@ export default function TopUpScreen() {
                     ))
                   ) : productsLoading ? (
                     <Text style={styles.emptyText}>Loading products...</Text>
-                  ) : activeSendProducts.length === 0 ? (
+                  ) : !isSupabaseConfigured && !__DEV__ ? (
                     <Text style={styles.emptyText}>
-                      Product is not ready for checkout. Please refresh and try again.
+                      Product catalog is unavailable because the app service is not configured.
                     </Text>
+                  ) : activeSendProducts.length === 0 ? (
+                    <Text style={styles.emptyText}>No checkout-ready products are available.</Text>
                   ) : (
                     <Text style={styles.emptyText}>{t('noMatchingProducts')}</Text>
                   )}
@@ -933,9 +953,15 @@ export default function TopUpScreen() {
       </ScrollView>
 
       <Modal visible={requestModalVisible} transparent animationType="slide" onRequestClose={() => router.back()}>
-        <View style={styles.requestModalOverlay}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.requestModalOverlay}>
           <View style={styles.requestModalSheet}>
-            <ScrollView contentContainerStyle={styles.requestModalContainer} showsVerticalScrollIndicator={false}>
+            <ScrollView
+              contentContainerStyle={[styles.requestModalContainer, { paddingBottom: Spacing.xxl + insets.bottom }]}
+              keyboardDismissMode="interactive"
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}>
               <View style={styles.flowStack}>
                 <View style={styles.flowHeader}>
                   <View style={styles.flowHeaderText}>
@@ -1014,6 +1040,9 @@ export default function TopUpScreen() {
                 {requestStep === 2 ? (
                   <SectionCard title={t('socialData')} subtitle={t('chooseSocialDataProducts')}>
                     <View style={styles.sectionStack}>
+                      <Pressable accessibilityRole="button" onPress={() => setRequestStep(1)} style={styles.backButton}>
+                        <Text style={styles.backButtonText}>{t('backWithArrow')}</Text>
+                      </Pressable>
                       <View style={styles.inputGroup}>
                         <TextInput
                           value={requestProductSearch}
@@ -1066,7 +1095,18 @@ export default function TopUpScreen() {
                       {!isSignedIn ? (
                         <>
                           <Text style={styles.warningText}>{t('signInRequiredBeforeRequestLink')}</Text>
-                          <PrimaryButton label={t('goToAccount')} onPress={() => router.push('/account')} />
+                          <View style={styles.actionRow}>
+                            <PrimaryButton
+                              label={t('backWithArrow')}
+                              onPress={() => setRequestStep(2)}
+                              style={styles.actionButtonFlex}
+                            />
+                            <PrimaryButton
+                              label={t('signIn')}
+                              onPress={() => router.push('/login')}
+                              style={styles.actionButtonFlex}
+                            />
+                          </View>
                         </>
                       ) : (
                         <>
@@ -1109,7 +1149,7 @@ export default function TopUpScreen() {
               </View>
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </>
   );

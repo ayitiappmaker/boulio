@@ -7,7 +7,7 @@ import { CompleteProfileForm, type ProfileFormValues } from '@/components/Comple
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { SectionCard } from '@/components/SectionCard';
 import { Colors, Radius, Spacing } from '@/constants/theme';
-import { preferredLotteryState, savedRecipients as mockSavedRecipients } from '@/lib/mockData';
+import { preferredLotteryState } from '@/lib/mockData';
 import { getCurrentSession, signOut, subscribeToSessionChanges } from '@/lib/auth';
 import { fetchMyActivity } from '@/lib/activity';
 import { deleteSavedRecipient, fetchSavedRecipients, type SavedRecipientRecord } from '@/lib/savedRecipients';
@@ -30,9 +30,9 @@ export default function AccountScreen() {
   const [activityTopUpOrders, setActivityTopUpOrders] = useState<TopUpOrderRecord[]>([]);
   const [activityDataRequests, setActivityDataRequests] = useState<DataRequestRecord[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
-  const [savedRecipients, setSavedRecipients] = useState<SavedRecipientRecord[]>(mapMockSavedRecipients());
+  const [savedRecipients, setSavedRecipients] = useState<SavedRecipientRecord[]>([]);
   const [savedRecipientsLoading, setSavedRecipientsLoading] = useState(false);
-  const [savedRecipientsSource, setSavedRecipientsSource] = useState<'live' | 'mock'>('mock');
+  const [savedRecipientsSource, setSavedRecipientsSource] = useState<'live' | 'unavailable'>('unavailable');
   const [deletingRecipientId, setDeletingRecipientId] = useState<string | null>(null);
   const [userMode, setUserMode] = useState<UserMode>(() => getStoredUserMode());
   const [profile, setProfile] = useState<ProfileRecord | null>(null);
@@ -181,8 +181,8 @@ export default function AccountScreen() {
     let active = true;
 
     if (!session) {
-      setSavedRecipients(mapMockSavedRecipients());
-      setSavedRecipientsSource('mock');
+      setSavedRecipients([]);
+      setSavedRecipientsSource('unavailable');
       setSavedRecipientsLoading(false);
       return undefined;
     }
@@ -198,8 +198,8 @@ export default function AccountScreen() {
       })
       .catch(() => {
         if (active) {
-          setSavedRecipients(mapMockSavedRecipients());
-          setSavedRecipientsSource('mock');
+          setSavedRecipients([]);
+          setSavedRecipientsSource('unavailable');
         }
       })
       .finally(() => {
@@ -231,8 +231,8 @@ export default function AccountScreen() {
       });
       setActivityTopUpOrders([]);
       setActivityDataRequests([]);
-      setSavedRecipients(mapMockSavedRecipients());
-      setSavedRecipientsSource('mock');
+      setSavedRecipients([]);
+      setSavedRecipientsSource('unavailable');
     } catch {
       // Keep sign-out failures quiet; the account screen remains usable.
     } finally {
@@ -535,18 +535,6 @@ function InfoRow({
       <Text style={[styles.badge, badgeTone === 'success' && styles.successBadge]}>{badge}</Text>
     </View>
   );
-}
-
-function mapMockSavedRecipients(): SavedRecipientRecord[] {
-  return mockSavedRecipients.map((recipient, index) => ({
-    id: recipient.id,
-    userId: null,
-    name: recipient.name,
-    carrier: recipient.carrier,
-    phoneNumber: recipient.phoneNumber,
-    createdAt: `2026-07-${String(index + 1).padStart(2, '0')}`,
-    updatedAt: null,
-  }));
 }
 
 function profileToFormValues(profile: ProfileRecord | null): ProfileFormValues {

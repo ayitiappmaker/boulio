@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, View, type ColorValue } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View, type ColorValue } from 'react-native';
 import { Tabs, usePathname, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -7,7 +7,7 @@ import { PostHogProvider } from 'posthog-react-native';
 
 import { Colors, Spacing } from '@/constants/theme';
 import { getCurrentSession, subscribeToSessionChanges } from '@/lib/auth';
-import { setLanguage, supportedLanguages, t, useLanguage } from '@/lib/i18n';
+import { hydrateLanguage, setLanguage, supportedLanguages, t, useLanguage } from '@/lib/i18n';
 import type { Session } from '@supabase/supabase-js';
 import { analyticsClient } from '@/lib/analytics';
 
@@ -19,6 +19,10 @@ export default function RootLayout() {
   const [session, setSession] = useState<Session | null>(null);
   const languageCode = useLanguage();
   const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
+
+  useEffect(() => {
+    void hydrateLanguage();
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -59,11 +63,7 @@ export default function RootLayout() {
             <Text style={styles.languageText}>{currentLanguage.label}</Text>
             <Text style={styles.languageChevron}>⌄</Text>
           </Pressable>
-          <Image
-            accessibilityLabel="Boulio"
-            source={require('../../assets/images/branding/boulio-header-logo.png')}
-            style={styles.brandLogo}
-          />
+          <Text style={styles.brandName}>{t('appName')}</Text>
           <Pressable accessibilityRole="button" onPress={() => router.push(accountTarget)} style={styles.accountButton}>
             <Text style={styles.accountText}>{session ? t('account') : t('signIn')}</Text>
           </Pressable>
@@ -102,7 +102,7 @@ export default function RootLayout() {
               shadowOpacity: 0,
               elevation: 0,
               paddingHorizontal: 0,
-              paddingBottom: Math.max(insets.bottom, 8),
+              paddingBottom: insets.bottom + 8,
               display: hideTabs ? 'none' : 'flex',
             },
           }}>
@@ -238,14 +238,17 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: Colors.light.text,
   },
-  brandLogo: {
+  brandName: {
     position: 'absolute',
     left: '50%',
     bottom: 10,
-    width: 42,
-    height: 42,
-    marginLeft: -21,
-    borderRadius: 12,
+    width: 96,
+    marginLeft: -48,
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: '800',
+    textAlign: 'center',
+    color: Colors.light.text,
   },
   tabIcon: {
     fontSize: 20,

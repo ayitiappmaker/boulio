@@ -48,7 +48,7 @@ export async function fetchSavedRecipients(): Promise<SavedRecipientRecord[]> {
   }
 
   if (!isSupabaseConfigured || !supabase) {
-    return [...mockFallbackStore];
+    return __DEV__ ? [...mockFallbackStore] : [];
   }
 
   try {
@@ -63,7 +63,7 @@ export async function fetchSavedRecipients(): Promise<SavedRecipientRecord[]> {
 
     return (data ?? []).map((row) => mapSavedRecipientRow(row as SavedRecipientRow));
   } catch {
-    return [...mockFallbackStore];
+    return __DEV__ ? [...mockFallbackStore] : [];
   }
 }
 
@@ -81,6 +81,10 @@ export async function createSavedRecipient(
   const normalizedPhone = normalizePhoneNumber(phoneNumber);
 
   if (!isSupabaseConfigured || !supabase) {
+    if (!__DEV__) {
+      throw new Error('Saved recipients are unavailable because the app service is not configured.');
+    }
+
     const existingMockRecipient = mockFallbackStore.find(
       (recipient) =>
         recipient.carrier === carrier && normalizePhoneNumber(recipient.phoneNumber) === normalizedPhone
@@ -131,7 +135,11 @@ export async function createSavedRecipient(
     }
 
     return { recipient: mapSavedRecipientRow(data as SavedRecipientRow), created: true };
-  } catch {
+  } catch (error) {
+    if (!__DEV__) {
+      throw error;
+    }
+
     const fallbackRecipient = mockFallbackStore.find(
       (recipient) =>
         recipient.carrier === carrier && normalizePhoneNumber(recipient.phoneNumber) === normalizedPhone
@@ -163,6 +171,10 @@ export async function deleteSavedRecipient(recipientId: string): Promise<void> {
   }
 
   if (!isSupabaseConfigured || !supabase) {
+    if (!__DEV__) {
+      throw new Error('Saved recipients are unavailable because the app service is not configured.');
+    }
+
     removeFromFallbackStore(recipientId);
     return;
   }
@@ -174,7 +186,11 @@ export async function deleteSavedRecipient(recipientId: string): Promise<void> {
     }
 
     removeFromFallbackStore(recipientId);
-  } catch {
+  } catch (error) {
+    if (!__DEV__) {
+      throw error;
+    }
+
     removeFromFallbackStore(recipientId);
   }
 }
