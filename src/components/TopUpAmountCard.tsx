@@ -1,7 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Radius, Spacing } from '@/constants/theme';
-import { t } from '@/lib/i18n';
 import { getRecipientReceivesLabel } from '@/lib/topupProductDisplay';
 import type { TopUpProduct } from '@/lib/types';
 
@@ -18,8 +17,10 @@ export function TopUpAmountCard({
 }: TopUpAmountCardProps) {
   const isAirtime = product.productType === 'airtime';
   const total = product.totalUsd;
-  const recipientReceivesLabel = isAirtime ? null : getRecipientReceivesLabel(product);
-  const bundleHelpfulLine = isAirtime ? null : getBundleHelpfulLine(product);
+  const recipientReceivesLabel = getRecipientReceivesLabel(product);
+  const recipientBenefit = recipientReceivesLabel === 'shown after confirmation'
+    ? product.name
+    : recipientReceivesLabel;
 
   return (
     <Pressable
@@ -48,22 +49,20 @@ export function TopUpAmountCard({
       <View style={styles.copyBlock}>
         {!isAirtime ? <Text style={[styles.detail, selected && styles.selectedText]}>{product.carrier}</Text> : null}
         <Text style={[styles.productName, selected && styles.selectedText]} numberOfLines={2}>
-          {isAirtime ? formatCurrency(product.price) : product.name}
+          {recipientBenefit}
         </Text>
+        <Text style={[styles.detail, selected && styles.selectedText]}>Recipient receives</Text>
 
         <View style={styles.metaRow}>
-          <Text style={[styles.total, selected && styles.selectedText]}>{`Total: ${formatCurrency(total)}`}</Text>
+          <View>
+            <Text style={[styles.total, selected && styles.selectedText]}>{formatCurrency(total)}</Text>
+            <Text style={[styles.detail, selected && styles.selectedText]}>Price</Text>
+          </View>
 
           <Text style={[styles.tag, selected && styles.selectedTag]}>
-            {isAirtime ? 'Mobile credit' : t('socialData')}
+            {isAirtime ? 'Mobile credit' : 'Data bundle'}
           </Text>
         </View>
-        {recipientReceivesLabel ? (
-          <Text style={[styles.detail, selected && styles.selectedText]}>{`Recipient receives: ${recipientReceivesLabel}`}</Text>
-        ) : null}
-        {bundleHelpfulLine ? (
-          <Text style={[styles.detail, selected && styles.selectedText]}>{bundleHelpfulLine}</Text>
-        ) : null}
         <Text style={[styles.detail, selected && styles.selectedText]}>
           {`You pay: ${formatCurrency(product.price)} + ${formatCurrency(product.serviceFee)} fee`}
         </Text>
@@ -80,16 +79,6 @@ export function TopUpAmountCard({
 
 function formatCurrency(value: number) {
   return `$${value.toFixed(2)}`;
-}
-
-function getBundleHelpfulLine(product: TopUpProduct) {
-  const metadata = product.externalProductMetadata;
-  const hasMinutes =
-    Boolean(metadata && typeof metadata === 'object' && !Array.isArray(metadata)) &&
-    Object.values(metadata as Record<string, unknown>)
-      .some((value) => typeof value === 'string' && /(minute|call|voice)/i.test(value));
-
-  return hasMinutes ? t('bundleHelpfulLineWithCalls') : t('bundleHelpfulLine');
 }
 
 const styles = StyleSheet.create({

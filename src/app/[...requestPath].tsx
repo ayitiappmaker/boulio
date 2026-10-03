@@ -92,9 +92,8 @@ export default function PublicRequestReviewScreen() {
     <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
       <View style={styles.hero}>
         <Text style={styles.brand}>{t('appName')}</Text>
-        <Text style={styles.title}>{t('familyDataRequest')}</Text>
-        <Text style={styles.subtitle}>{t('familyReviewBeforeContinuing')}</Text>
-        <Text style={styles.helper}>{t('youWillReceiveConfirmationLater')}</Text>
+        <Text style={styles.title}>Data request</Text>
+        <Text style={styles.subtitle}>Review the request and help this recipient stay connected.</Text>
       </View>
 
       {state.loading ? (
@@ -103,22 +102,19 @@ export default function PublicRequestReviewScreen() {
         </SectionCard>
       ) : lookup?.status === 'found' && request ? (
         <>
-        <SectionCard title={t('requestDetails')} subtitle={t('quickSummaryOfRequest')}>
+        <SectionCard title="Request details" subtitle="No sign-in or app install required.">
             <View style={styles.summaryCard}>
-              <SummaryRow label={t('carrier')} value={formatCarrier(request.carrier)} />
-              <SummaryRow label={t('chooseDataPackage')} value={request.bundleLabel ?? request.productName} />
-              <SummaryRow label={t('enterHaitiPhoneNumber')} value={request.recipientPhone} />
-              <SummaryRow label={t('serviceTotal')} value={formatServiceTotal(request.totalUsd)} strong />
-              <SummaryRow label={t('pendingPayment')} value={t('pendingPayment')} />
-              <SummaryRow label={t('requestStatus')} value={formatRequestStatus(request.publicStatus)} />
-              <SummaryRow label={t('created')} value={formatDate(request.createdAt)} />
+              <SummaryRow label="Recipient" value={formatHaitiPhone(request.recipientPhone)} />
+              <SummaryRow label="Carrier" value={formatCarrier(request.carrier)} />
+              <SummaryRow label="Bundle" value={request.bundleLabel ?? request.productName} />
+              <SummaryRow label="Recipient receives" value={request.bundleLabel ?? request.productName} />
+              <SummaryRow label="Price" value={formatServiceTotal(request.totalUsd)} strong />
             </View>
-                <Text style={styles.note}>{paymentNotice ?? t('onlinePaymentWillBeConnectedSoon')}</Text>
+            {paymentNotice ? <Text style={styles.note}>{paymentNotice}</Text> : null}
             </SectionCard>
 
-          <SectionCard title={t('completeThisDataRequest')} subtitle={t('reviewBeforePayment')}>
-            <Text style={styles.body}>{t('reviewBeforePayment')}</Text>
-            <PrimaryButton label={t('completePayment')} onPress={handlePaymentComingSoon} style={styles.button} />
+          <SectionCard title="Pay securely" subtitle="Secure payment powered by Stripe">
+            <PrimaryButton label="Pay request" onPress={handlePaymentComingSoon} style={styles.button} />
           </SectionCard>
         </>
       ) : (
@@ -151,37 +147,13 @@ function SummaryRow({ label, value, strong }: { label: string; value: string; st
 }
 
 function formatCarrier(carrier: string) {
-  return carrier === 'digicel' ? 'Digicel' : 'Natcom';
+  return carrier.toLowerCase() === 'digicel' ? 'Digicel' : 'Natcom';
 }
 
-function formatRequestStatus(status: string) {
-  switch (status) {
-    case 'open':
-      return t('waitingForSupporter');
-    case 'paid':
-      return t('paid');
-    case 'completed':
-      return t('completed');
-    case 'expired':
-      return t('expired');
-    case 'cancelled':
-      return t('cancelled');
-    default:
-      return status;
-  }
-}
-
-function formatDate(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
+function formatHaitiPhone(phone: string) {
+  const digits = phone.replace(/\D/g, '').replace(/^509/, '');
+  if (digits.length !== 8) return phone;
+  return `+509 ${digits.slice(0, 2)} ${digits.slice(2, 4)} ${digits.slice(4, 6)} ${digits.slice(6)}`;
 }
 
 const styles = StyleSheet.create({

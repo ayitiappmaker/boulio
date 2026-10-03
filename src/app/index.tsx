@@ -3,7 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Radius, SHADOW, Spacing } from '@/constants/theme';
 
-type ServiceKind = 'phone' | 'social' | 'request';
+type ServiceKind = 'phone' | 'data' | 'request';
 
 const services: Array<{
   kind: ServiceKind;
@@ -18,9 +18,9 @@ const services: Array<{
     badge: 'From $5',
   },
   {
-    kind: 'social',
-    title: 'Social Data',
-    description: 'WhatsApp, TikTok, Facebook and more.',
+    kind: 'data',
+    title: 'Data Bundle',
+    description: 'Choose a Digicel or Natcom data plan.',
     badge: 'From $5',
   },
   {
@@ -40,13 +40,6 @@ export default function HomeScreen() {
         <Text style={styles.supportingCopy}>
           Top up your phone, get data bundles, and stay close to what matters.
         </Text>
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => router.push('/topup')}
-          style={({ pressed }) => [styles.primaryAction, pressed && styles.primaryActionPressed]}>
-          <Text style={styles.primaryActionText}>Get started</Text>
-          <Text style={styles.primaryActionArrow}>→</Text>
-        </Pressable>
       </View>
 
       <View style={styles.serviceList}>
@@ -54,9 +47,10 @@ export default function HomeScreen() {
           <ServiceCard
             key={service.title}
             {...service}
-            onPress={() => router.push(service.kind === 'request'
-              ? { pathname: '/topup', params: { mode: 'request' } }
-              : '/topup')}
+            onPress={() => router.push({
+              pathname: '/topup',
+              params: { mode: service.kind === 'phone' ? 'airtime' : service.kind },
+            })}
           />
         ))}
       </View>
@@ -120,7 +114,7 @@ function ServiceIcon({ kind }: { kind: ServiceKind }) {
           <View style={styles.phoneButton} />
         </View>
       ) : null}
-      {kind === 'social' ? (
+      {kind === 'data' ? (
         <View style={styles.signalIcon}>
           <View style={[styles.signalBar, styles.signalBarOne]} />
           <View style={[styles.signalBar, styles.signalBarTwo]} />
@@ -136,7 +130,7 @@ function ServiceIcon({ kind }: { kind: ServiceKind }) {
         </View>
       ) : null}
       <View style={styles.iconBadge}>
-        <Text style={styles.iconBadgeText}>{kind === 'phone' ? '$' : kind === 'social' ? '●' : '↑'}</Text>
+        <Text style={styles.iconBadgeText}>{kind === 'phone' ? '$' : kind === 'data' ? 'GB' : '↑'}</Text>
       </View>
     </View>
   );
@@ -154,9 +148,9 @@ const styles = StyleSheet.create({
   container: {
     flexGrow: 1,
     paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.xl,
+    paddingTop: Spacing.lg,
     paddingBottom: Spacing.xl,
-    gap: Spacing.xl,
+    gap: Spacing.lg,
     backgroundColor: Colors.light.background,
   },
   hero: {
@@ -164,8 +158,8 @@ const styles = StyleSheet.create({
   },
   headline: {
     maxWidth: 370,
-    fontSize: 38,
-    lineHeight: 44,
+    fontSize: 34,
+    lineHeight: 40,
     fontWeight: '800',
     letterSpacing: -1.25,
     color: Colors.light.text,
@@ -175,32 +169,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 24,
     color: Colors.light.textSecondary,
-  },
-  primaryAction: {
-    minHeight: 58,
-    width: '100%',
-    marginTop: Spacing.xs,
-    borderRadius: Radius.xl,
-    paddingHorizontal: Spacing.xl,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: Spacing.sm,
-    backgroundColor: Colors.light.primary,
-  },
-  primaryActionPressed: {
-    backgroundColor: Colors.light.primaryPressed,
-  },
-  primaryActionText: {
-    fontSize: 17,
-    lineHeight: 22,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  primaryActionArrow: {
-    fontSize: 25,
-    lineHeight: 26,
-    color: Colors.light.gold,
   },
   serviceList: {
     gap: Spacing.md,
