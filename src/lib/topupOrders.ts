@@ -15,7 +15,7 @@ export type TopUpOrderStatus =
   | 'cancelled';
 
 export type TopUpPaymentStatus = 'unpaid' | 'pending' | 'paid' | 'failed' | 'refunded';
-export type TopUpSupplierStatus = 'not_sent' | 'pending' | 'successful' | 'failed';
+export type TopUpSupplierStatus = 'not_sent' | 'pending' | 'processing' | 'successful' | 'failed';
 
 export type TopUpOrderRecord = {
   id: string;
@@ -38,13 +38,8 @@ export type TopUpOrderRecord = {
 
 export type CreatePendingTopUpOrderInput = {
   productId: string;
-  carrier: TopUpCarrier;
-  productType: 'airtime' | 'data';
-  productName: string;
   recipientPhone: string;
   recipientName?: string | null;
-  amountUsd: number;
-  serviceFeeUsd: number;
 };
 
 type TopUpOrderRow = {
@@ -80,29 +75,11 @@ export async function createPendingTopUpOrder(
     throw new Error('Supabase is not configured.');
   }
 
-  const totalUsd = Number((input.amountUsd + input.serviceFeeUsd).toFixed(2));
-
-  const { data, error } = await supabase
-    .from('topup_orders')
-    .insert({
-      user_id: session.user.id,
-      product_id: input.productId,
-      carrier: input.carrier,
-      product_type: input.productType,
-      product_name: input.productName,
-      recipient_phone: input.recipientPhone,
-      recipient_name: input.recipientName?.trim() || '',
-      amount_usd: input.amountUsd,
-      service_fee_usd: input.serviceFeeUsd,
-      total_usd: totalUsd,
-      status: 'pending_payment',
-      payment_status: 'unpaid',
-      supplier_status: 'not_sent',
-    })
-    .select(
-      'id, product_id, carrier, product_type, product_name, recipient_phone, recipient_name, amount_usd, service_fee_usd, total_usd, status, payment_status, supplier_status, supplier_reference, created_at, updated_at'
-    )
-    .single();
+  const { data, error } = await supabase.rpc('create_topup_order', {
+    p_product_id: input.productId,
+    p_recipient_phone: input.recipientPhone,
+    p_recipient_name: input.recipientName?.trim() || null,
+  });
 
   if (error) {
     throw new Error(error.message);

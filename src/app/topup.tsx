@@ -572,13 +572,8 @@ export default function TopUpScreen() {
     try {
       const nextOrder = await createPendingTopUpOrder({
         productId: selectedSendProduct.id,
-        carrier: selectedSendProduct.carrier,
-        productType: selectedSendProduct.productType,
-        productName: selectedSendProduct.name,
         recipientPhone: normalizedPhone,
         recipientName: null,
-        amountUsd: selectedSendProduct.amountUsd,
-        serviceFeeUsd: selectedSendProduct.serviceFeeUsd,
       });
 
       setSendOrder(nextOrder);
@@ -629,12 +624,8 @@ export default function TopUpScreen() {
 
     try {
       const nextRequest = await createDataRequest({
+        productId: selectedRequestProduct.id,
         recipientPhone: normalizedPhone,
-        carrier: requestCarrier,
-        productName: selectedRequestProduct.name,
-        bundleLabel: selectedRequestProduct.bundleLabel,
-        amountUsd: selectedRequestProduct.amountUsd,
-        serviceFeeUsd: selectedRequestProduct.serviceFeeUsd,
       });
 
       setRequestLink(`https://boulio.app/request/${nextRequest.requestCode}`);
