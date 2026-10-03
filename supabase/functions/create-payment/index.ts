@@ -210,7 +210,11 @@ function parseExpectedLivemode(value: string | undefined) {
 }
 
 function stripeKeyMatchesExpectedMode(secretKey: string, expectedLivemode: boolean) {
-  return expectedLivemode ? secretKey.startsWith('sk_live_') : secretKey.startsWith('sk_test_');
+  if (expectedLivemode) {
+    return secretKey.startsWith('sk_live_') || secretKey.startsWith('rk_live_');
+  }
+
+  return secretKey.startsWith('sk_test_') || secretKey.startsWith('rk_test_');
 }
 
 function getBearerToken(headerValue: string | null) {
