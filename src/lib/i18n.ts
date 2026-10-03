@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+
+import { platformStorage } from '@/lib/storage';
 
 export type LanguageCode = 'en' | 'ht' | 'fr' | 'es' | 'pt';
 
@@ -1121,7 +1122,7 @@ export async function hydrateLanguage() {
 
   languageHydrated = true;
   try {
-    const storedLanguage = await AsyncStorage.getItem(STORAGE_KEY);
+    const storedLanguage = await platformStorage.getItem(STORAGE_KEY);
     if (isLanguageCode(storedLanguage) && storedLanguage !== currentLanguage) {
       currentLanguage = storedLanguage;
       notifyLanguageListeners();
@@ -1135,7 +1136,7 @@ export async function hydrateLanguage() {
 
 export function setLanguage(language: LanguageCode) {
   currentLanguage = language;
-  void AsyncStorage.setItem(STORAGE_KEY, language).catch(() => undefined);
+  void Promise.resolve(platformStorage.setItem(STORAGE_KEY, language)).catch(() => undefined);
   notifyLanguageListeners();
 }
 
