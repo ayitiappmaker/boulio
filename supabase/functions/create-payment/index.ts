@@ -1,10 +1,11 @@
 // Supabase Edge Function: create-payment
 //
-// Test-mode Stripe Checkout only.
+// Stripe Checkout with an explicit test/live environment guard.
 // Required environment variables:
 // - SUPABASE_URL
 // - SUPABASE_SERVICE_ROLE_KEY
 // - STRIPE_SECRET_KEY
+// - STRIPE_EXPECTED_LIVEMODE
 // - CHECKOUT_SUCCESS_URL
 // - CHECKOUT_CANCEL_URL
 //
@@ -78,12 +79,21 @@ Deno.serve(async (req) => {
   const baseUrl = Deno.env.get('SUPABASE_URL')?.trim();
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')?.trim();
   const stripeSecretKey = Deno.env.get('STRIPE_SECRET_KEY')?.trim();
+  const expectedLivemode = parseExpectedLivemode(Deno.env.get('STRIPE_EXPECTED_LIVEMODE'));
   const successUrl = Deno.env.get('CHECKOUT_SUCCESS_URL')?.trim() || SUCCESS_FALLBACK_URL;
   const cancelUrl = Deno.env.get('CHECKOUT_CANCEL_URL')?.trim() || CANCEL_FALLBACK_URL;
 
-  if (!baseUrl || !serviceRoleKey || !stripeSecretKey || !stripeSecretKey.startsWith('sk_test_')) {
+  if (
+    !baseUrl ||
+    !serviceRoleKey ||
+    !stripeSecretKey ||
+    expectedLivemode === null ||
+    !stripeKeyMatchesExpectedMode(stripeSecretKey, expectedLivemode)
+  ) {
     return jsonResponse(200, PLACEHOLDER_RESPONSE, corsHeaders);
   }
+
+  const stripeEnvironment = expectedLivemode ? 'live' : 'test';
 
   const body = (await req.json().catch(() => null)) as CreatePaymentRequest | null;
   const targetType = body?.target_type;
@@ -123,7 +133,7 @@ Deno.serve(async (req) => {
         target_type: targetType,
         target_id: order.id,
         user_id: authUser.id,
-        environment: 'test',
+        environment: stripeEnvironment,
       },
       customerEmail: authUser.email ?? undefined,
     });
@@ -137,7 +147,7 @@ Deno.serve(async (req) => {
       {
         ok: true,
         code: 'CHECKOUT_SESSION_CREATED',
-        message: 'Test checkout session created.',
+        message: `${stripeEnvironment === 'live' ? 'Live' : 'Test'} checkout session created.`,
         checkout_url: stripeSession.url,
         session_id: stripeSession.id,
       },
@@ -167,7 +177,7 @@ Deno.serve(async (req) => {
       target_type: targetType,
       target_id: targetId,
       request_code: requestRow.request_code,
-      environment: 'test',
+      environment: stripeEnvironment,
     },
   });
 
@@ -187,6 +197,21 @@ Deno.serve(async (req) => {
     corsHeaders
   );
 });
+
+function parseExpectedLivemode(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === 'true') {
+    return true;
+  }
+  if (normalized === 'false') {
+    return false;
+  }
+  return null;
+}
+
+function stripeKeyMatchesExpectedMode(secretKey: string, expectedLivemode: boolean) {
+  return expectedLivemode ? secretKey.startsWith('sk_live_') : secretKey.startsWith('sk_test_');
+}
 
 function getBearerToken(headerValue: string | null) {
   if (!headerValue) {

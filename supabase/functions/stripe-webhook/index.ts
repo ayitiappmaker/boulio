@@ -1,10 +1,11 @@
 // Supabase Edge Function: stripe-webhook
 //
-// Test-mode Stripe webhook only.
+// Stripe webhook with an explicit test/live environment guard.
 // Required environment variables:
 // - SUPABASE_URL
 // - SUPABASE_SERVICE_ROLE_KEY
 // - STRIPE_WEBHOOK_SECRET
+// - STRIPE_EXPECTED_LIVEMODE
 //
 // Stripe webhook events are the source of truth for payment completion once
 // test checkout is enabled. This function verifies the webhook signature,
@@ -81,10 +82,13 @@ Deno.serve(async (req) => {
   const baseUrl = Deno.env.get('SUPABASE_URL')?.trim().replace(/\/$/, '');
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')?.trim();
   const webhookSecret = Deno.env.get('STRIPE_WEBHOOK_SECRET')?.trim();
+  const expectedLivemode = parseExpectedLivemode(Deno.env.get('STRIPE_EXPECTED_LIVEMODE'));
 
-  if (!baseUrl || !serviceRoleKey || !webhookSecret) {
+  if (!baseUrl || !serviceRoleKey || !webhookSecret || expectedLivemode === null) {
     return jsonResponse(500, { ok: false, code: 'WEBHOOK_NOT_CONFIGURED' }, corsHeaders);
   }
+
+  const stripeEnvironment = expectedLivemode ? 'live' : 'test';
 
   const rawBody = await req.text();
   const signature = req.headers.get('stripe-signature');
@@ -94,8 +98,12 @@ Deno.serve(async (req) => {
   }
 
   const event = parseStripeEvent(rawBody);
-  if (!event?.type || event.livemode) {
-    return jsonResponse(400, { ok: false, code: 'LIVE_MODE_NOT_ALLOWED' }, corsHeaders);
+  if (!event?.type || typeof event.livemode !== 'boolean') {
+    return jsonResponse(400, { ok: false, code: 'INVALID_STRIPE_EVENT_MODE' }, corsHeaders);
+  }
+
+  if (event.livemode !== expectedLivemode) {
+    return jsonResponse(400, { ok: false, code: 'STRIPE_MODE_MISMATCH' }, corsHeaders);
   }
 
   const eventObject = event.data?.object ?? {};
@@ -109,13 +117,13 @@ Deno.serve(async (req) => {
 
   switch (event.type) {
     case 'checkout.session.completed':
-      return await handleCheckoutSessionCompleted(baseUrl, serviceRoleKey, eventObject, metadata, targetType, targetId);
+      return await handleCheckoutSessionCompleted(baseUrl, serviceRoleKey, eventObject, metadata, targetType, targetId, stripeEnvironment);
     case 'payment_intent.succeeded':
-      return await handlePaymentIntentSucceeded(baseUrl, serviceRoleKey, eventObject, metadata, targetType, targetId);
+      return await handlePaymentIntentSucceeded(baseUrl, serviceRoleKey, eventObject, metadata, targetType, targetId, stripeEnvironment);
     case 'payment_intent.payment_failed':
-      return await handlePaymentFailed(baseUrl, serviceRoleKey, targetType, targetId, eventObject, metadata);
+      return await handlePaymentFailed(baseUrl, serviceRoleKey, targetType, targetId, eventObject, metadata, stripeEnvironment);
     case 'checkout.session.expired':
-      return await handleCheckoutExpired(baseUrl, serviceRoleKey, targetType, targetId, eventObject, metadata);
+      return await handleCheckoutExpired(baseUrl, serviceRoleKey, targetType, targetId, eventObject, metadata, stripeEnvironment);
     default:
       return jsonResponse(200, { ok: true, code: 'IGNORED', message: 'Event ignored.' }, corsHeaders);
   }
@@ -127,9 +135,10 @@ async function handleCheckoutSessionCompleted(
   eventObject: StripeEventObject,
   metadata: Record<string, string>,
   targetType: PaymentTargetType,
-  targetId: string
+  targetId: string,
+  stripeEnvironment: 'test' | 'live'
 ) {
-  if (metadata.environment !== 'test' || eventObject.payment_status !== 'paid') {
+  if (metadata.environment !== stripeEnvironment || eventObject.payment_status !== 'paid') {
     return jsonResponse(200, { ok: true, code: 'IGNORED', message: 'Checkout session is not eligible.' }, corsHeaders);
   }
 
@@ -186,9 +195,10 @@ async function handlePaymentIntentSucceeded(
   eventObject: StripeEventObject,
   metadata: Record<string, string>,
   targetType: PaymentTargetType,
-  targetId: string
+  targetId: string,
+  stripeEnvironment: 'test' | 'live'
 ) {
-  if (metadata.environment !== 'test') {
+  if (metadata.environment !== stripeEnvironment) {
     return jsonResponse(200, { ok: true, code: 'IGNORED' }, corsHeaders);
   }
 
@@ -245,9 +255,10 @@ async function handlePaymentFailed(
   targetType: PaymentTargetType,
   targetId: string,
   eventObject: StripeEventObject,
-  metadata: Record<string, string>
+  metadata: Record<string, string>,
+  stripeEnvironment: 'test' | 'live'
 ) {
-  if (metadata.environment !== 'test') {
+  if (metadata.environment !== stripeEnvironment) {
     return jsonResponse(200, { ok: true, code: 'IGNORED' }, corsHeaders);
   }
 
@@ -288,9 +299,10 @@ async function handleCheckoutExpired(
   targetType: PaymentTargetType,
   targetId: string,
   eventObject: StripeEventObject,
-  metadata: Record<string, string>
+  metadata: Record<string, string>,
+  stripeEnvironment: 'test' | 'live'
 ) {
-  if (metadata.environment !== 'test') {
+  if (metadata.environment !== stripeEnvironment) {
     return jsonResponse(200, { ok: true, code: 'IGNORED' }, corsHeaders);
   }
 
@@ -320,6 +332,17 @@ async function handleCheckoutExpired(
   });
 
   return jsonResponse(200, { ok: true, code: 'REQUEST_EXPIRED' }, corsHeaders);
+}
+
+function parseExpectedLivemode(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === 'true') {
+    return true;
+  }
+  if (normalized === 'false') {
+    return false;
+  }
+  return null;
 }
 
 function parseStripeEvent(rawBody: string): StripeEventPayload | null {
