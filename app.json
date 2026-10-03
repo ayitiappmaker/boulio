@@ -34,7 +34,9 @@
           "resizeMode": "contain"
         }
       ],
-      "expo-status-bar"
+      "expo-status-bar",
+      "expo-image",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
