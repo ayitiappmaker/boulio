@@ -2,6 +2,7 @@ import { useRouter } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Radius, SHADOW, Spacing } from '@/constants/theme';
+import { trackAnalyticsEvent } from '@/lib/analytics';
 
 type ServiceKind = 'phone' | 'data' | 'request';
 
@@ -47,10 +48,19 @@ export default function HomeScreen() {
           <ServiceCard
             key={service.title}
             {...service}
-            onPress={() => router.push({
-              pathname: '/topup',
-              params: { mode: service.kind === 'phone' ? 'airtime' : service.kind },
-            })}
+            onPress={() => {
+              trackAnalyticsEvent(
+                service.kind === 'phone'
+                  ? 'home_phone_credit_clicked'
+                  : service.kind === 'data'
+                    ? 'home_data_bundle_clicked'
+                    : 'home_request_data_clicked'
+              );
+              router.push({
+                pathname: '/topup',
+                params: { mode: service.kind === 'phone' ? 'airtime' : service.kind },
+              });
+            }}
           />
         ))}
       </View>

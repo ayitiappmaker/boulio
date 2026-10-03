@@ -28,6 +28,7 @@ import {
 } from '@/lib/carrierDetection';
 import type { Session } from '@supabase/supabase-js';
 import type { TopUpCarrier, TopUpProduct, UserMode } from '@/lib/types';
+import { analyticsCarrier, trackAnalyticsEvent } from '@/lib/analytics';
 
 type SendStep = 1 | 2 | 3;
 type RequestStep = 1 | 2 | 3 | 4;
@@ -594,6 +595,11 @@ export default function TopUpScreen() {
       });
 
       setSendOrder(nextOrder);
+      trackAnalyticsEvent('checkout_started', {
+        target_type: 'topup_order',
+        carrier: analyticsCarrier(selectedSendProduct.carrier),
+        price_usd: selectedSendProduct.totalUsd,
+      });
       const paymentResult = await createPaymentForTopUpOrder(nextOrder.id);
       if (paymentResult.checkoutUrl) {
         setSendPaymentNotice(t('stripeCheckoutOpenedNotice'));
@@ -654,6 +660,10 @@ export default function TopUpScreen() {
       setRequestStep(4);
       setRequestStatus(t('requestLinkCreatedSuccessfully'));
       setRequestRecipientMessage(null);
+      trackAnalyticsEvent('request_created', {
+        carrier: analyticsCarrier(nextRequest.carrier),
+        price_usd: nextRequest.totalUsd,
+      });
 
       if (requestSaveRecipient) {
         await maybeSaveRecipient(
@@ -680,7 +690,10 @@ export default function TopUpScreen() {
     if (!requestLink) return;
 
     try {
-      await Share.share({ message: getRequestShareMessage(), url: requestLink });
+      const result = await Share.share({ message: getRequestShareMessage(), url: requestLink });
+      if (result.action === Share.sharedAction) {
+        trackAnalyticsEvent('request_shared', { method: 'native_share' });
+      }
     } catch {
       setRequestStatus('Sharing is unavailable right now.');
     }
@@ -693,6 +706,7 @@ export default function TopUpScreen() {
     try {
       if (await Linking.canOpenURL(whatsappUrl)) {
         await Linking.openURL(whatsappUrl);
+        trackAnalyticsEvent('request_shared', { method: 'whatsapp' });
       } else {
         await handleShare();
       }
@@ -708,6 +722,7 @@ export default function TopUpScreen() {
 
     try {
       await Clipboard.setStringAsync(requestLink);
+      trackAnalyticsEvent('request_shared', { method: 'copy_link' });
       setRequestStatus(t('copyLinkSuccess'));
     } catch {
       setRequestStatus(t('copyLinkUnavailable'));
@@ -777,6 +792,13 @@ export default function TopUpScreen() {
                         product={product}
                         selected={product.id === selectedSendProductId}
                         onPress={() => {
+                          trackAnalyticsEvent('topup_product_selected', {
+                            flow: sendProductType === 'airtime' ? 'phone_credit' : 'data_bundle',
+                            carrier: analyticsCarrier(product.carrier),
+                            product_type: product.productType,
+                            product_id: product.id,
+                            price_usd: product.totalUsd,
+                          });
                           setSelectedSendProductId(product.id);
                           setSendError(null);
                           setSendPaymentNotice(null);
@@ -864,7 +886,15 @@ export default function TopUpScreen() {
                   />
                         <PrimaryButton
                           label={t('continueWithArrow')}
-                          onPress={() => setSendStep(2)}
+                          onPress={() => {
+                            if (confirmedSendCarrier) {
+                              trackAnalyticsEvent('recipient_phone_valid', {
+                                flow: sendProductType === 'airtime' ? 'phone_credit' : 'data_bundle',
+                                carrier: analyticsCarrier(confirmedSendCarrier),
+                              });
+                            }
+                            setSendStep(2);
+                          }}
                           disabled={!sendPhoneValid || !confirmedSendCarrier}
                           style={styles.actionButtonFlex}
                         />
@@ -964,7 +994,15 @@ export default function TopUpScreen() {
                         />
                         <PrimaryButton
                           label={t('continueWithArrow')}
-                          onPress={() => setRequestStep(2)}
+                          onPress={() => {
+                            if (requestCarrier) {
+                              trackAnalyticsEvent('recipient_phone_valid', {
+                                flow: 'request_data',
+                                carrier: analyticsCarrier(requestCarrier),
+                              });
+                            }
+                            setRequestStep(2);
+                          }}
                           disabled={!requestPhoneValid || !requestCarrier}
                           style={styles.actionButtonFlex}
                         />
@@ -996,6 +1034,11 @@ export default function TopUpScreen() {
                               product={product}
                               selected={product.id === selectedRequestProductId}
                               onPress={() => {
+                                trackAnalyticsEvent('request_product_selected', {
+                                  carrier: analyticsCarrier(product.carrier),
+                                  product_id: product.id,
+                                  price_usd: product.totalUsd,
+                                });
                                 setSelectedRequestProductId(product.id);
                                 setRequestCarrier(product.carrier);
                                 setRequestError(null);

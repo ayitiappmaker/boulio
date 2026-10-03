@@ -3,11 +3,13 @@ import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, View, type Color
 import { Tabs, usePathname, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PostHogProvider } from 'posthog-react-native';
 
 import { Colors, Spacing } from '@/constants/theme';
 import { getCurrentSession, subscribeToSessionChanges } from '@/lib/auth';
 import { setLanguage, supportedLanguages, t, useLanguage } from '@/lib/i18n';
 import type { Session } from '@supabase/supabase-js';
+import { analyticsClient } from '@/lib/analytics';
 
 export default function RootLayout() {
   const router = useRouter();
@@ -47,7 +49,7 @@ export default function RootLayout() {
   const currentLanguage = supportedLanguages.find((language) => language.code === languageCode) ?? supportedLanguages[0];
 
   return (
-    <>
+    <PostHogProvider client={analyticsClient} autocapture={false}>
       <View style={styles.shell}>
         <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
           <Pressable
@@ -171,7 +173,7 @@ export default function RootLayout() {
         </Modal>
       </View>
       <StatusBar style="auto" />
-    </>
+    </PostHogProvider>
   );
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { usePathname } from 'expo-router';
 
@@ -9,6 +9,7 @@ import { fetchPublicDataRequestByCode, type DataRequestRecord, type PublicDataRe
 import { formatServiceTotal } from '@/lib/paymentFlow';
 import { createPaymentForDataRequest, openCheckoutUrl } from '@/lib/payments';
 import { t, useLanguage } from '@/lib/i18n';
+import { analyticsCarrier, trackAnalyticsEvent } from '@/lib/analytics';
 
 type RequestPageState = {
   loading: boolean;
@@ -25,6 +26,7 @@ export default function PublicRequestReviewScreen() {
     request: null,
   });
   const [paymentNotice, setPaymentNotice] = useState<string | null>(null);
+  const trackedViewedRequestId = useRef<string | null>(null);
 
   useEffect(() => {
     const requestCode = getRequestCodeFromPath(pathname);
@@ -71,6 +73,18 @@ export default function PublicRequestReviewScreen() {
   }, [pathname]);
 
   const handlePaymentComingSoon = async () => {
+    if (request) {
+      trackAnalyticsEvent('request_payment_started', {
+        carrier: analyticsCarrier(request.carrier),
+        price_usd: request.totalUsd,
+      });
+      trackAnalyticsEvent('checkout_started', {
+        target_type: 'data_request',
+        carrier: analyticsCarrier(request.carrier),
+        price_usd: request.totalUsd,
+      });
+    }
+
     try {
       const requestCode = request?.requestCode ?? getRequestCodeFromPath(pathname) ?? '';
       const result = await createPaymentForDataRequest(requestCode);
@@ -87,6 +101,18 @@ export default function PublicRequestReviewScreen() {
 
   const request = state.request;
   const lookup = state.lookup;
+
+  useEffect(() => {
+    if (lookup?.status !== 'found' || !request || trackedViewedRequestId.current === request.id) {
+      return;
+    }
+
+    trackedViewedRequestId.current = request.id;
+    trackAnalyticsEvent('request_payment_viewed', {
+      carrier: analyticsCarrier(request.carrier),
+      price_usd: request.totalUsd,
+    });
+  }, [lookup?.status, request]);
 
   return (
     <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
