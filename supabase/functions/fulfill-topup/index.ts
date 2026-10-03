@@ -15,6 +15,12 @@
 // - when explicitly requested with live_manual and a matching admin secret,
 //   sends the real DT One request from the server.
 //
+// Every mode (dry_run, live_manual, check_status) requires a valid
+// x-fulfillment-admin-secret header matching FULFILLMENT_ADMIN_SECRET. This
+// function is only reachable in practice via admin-fulfillment-action, which
+// verifies the caller is a signed-in allowlisted admin before attaching this
+// secret server-side; the browser never sees it.
+//
 // It never exposes DT One credentials to the client. It does not automate
 // fulfillment from Stripe and it does not mark orders completed unless DT One
 // returns a confirmed success response.
@@ -57,20 +63,31 @@ type TopUpProductRow = {
   external_product_metadata: Record<string, unknown> | null;
 };
 
+type DtOneFixedPayload = {
+  product_id: string;
+  credit_party_identifier: {
+    mobile_number: string;
+  };
+  external_id: string;
+  auto_confirm: true;
+};
+
+type DtOneRangedSourceAmountPayload = DtOneFixedPayload & {
+  calculation_mode: "SOURCE_AMOUNT";
+  source: {
+    unit_type: "CURRENCY";
+    unit: "USD";
+    amount: number;
+  };
+};
+
 type PreparedFulfillment = {
   order: TopUpOrderRow;
   product: TopUpProductRow;
   recipientPhone: string;
   dtoneMobileNumber: string;
   externalId: string;
-  payloadPreview: {
-    product_id: string;
-    credit_party_identifier: {
-      mobile_number: string;
-    };
-    external_id: string;
-    auto_confirm: true;
-  };
+  payloadPreview: DtOneFixedPayload | DtOneRangedSourceAmountPayload;
 };
 
 type DryRunSuccessResponse = {
@@ -170,6 +187,10 @@ type FulfillmentErrorCode =
   | "UNAUTHORIZED_ADMIN_SECRET_INVALID"
   | "INVALID_REQUEST"
   | "FULFILLMENT_NOT_READY"
+  | "FULFILLMENT_ALREADY_CLAIMED"
+  | "FULFILLMENT_CLAIM_FAILED"
+  | "FULFILLMENT_FINALIZE_FAILED"
+  | "FULFILLMENT_UNCONFIRMED"
   | "ORDER_NOT_FOUND"
   | "PRODUCT_ID_MISSING"
   | "PRODUCT_NOT_FOUND"
@@ -272,7 +293,12 @@ Deno.serve(async (req) => {
     );
   }
 
-  if (mode === "live_manual" || mode === "check_status") {
+  // Every mode (including dry_run) requires the shared admin secret. This
+  // function is only ever meant to be reached via the admin-fulfillment-action
+  // wrapper, which verifies the caller is a signed-in allowlisted admin and
+  // then attaches this secret server-side. Requiring it here for all modes
+  // closes off direct client access to order details and DT One preview data.
+  {
     const adminSecret = Deno.env.get("FULFILLMENT_ADMIN_SECRET")?.trim();
     const requestSecret = req.headers.get("x-fulfillment-admin-secret")?.trim();
 
@@ -283,7 +309,7 @@ Deno.serve(async (req) => {
           targetId,
           true,
           "DTONE_NOT_CONFIGURED",
-          "Manual fulfillment admin secret is not configured.",
+          "Fulfillment admin secret is not configured.",
         ),
         corsHeaders,
       );
@@ -296,7 +322,7 @@ Deno.serve(async (req) => {
           targetId,
           true,
           "UNAUTHORIZED_ADMIN_SECRET_INVALID",
-          "Invalid admin secret for manual fulfillment.",
+          "Invalid admin secret for this fulfillment request.",
         ),
         corsHeaders,
       );
@@ -422,16 +448,12 @@ async function prepareFulfillment(
     return { error: orderReadiness };
   }
 
-  if (normalizeText(order.supplier_reference)) {
-    return {
-      error: {
-        httpStatus: 409,
-        code: "FULFILLMENT_NOT_READY",
-        message:
-          "This order already has a supplier reference. Live manual fulfillment can only happen once.",
-      },
-    };
-  }
+  // Note: whether this order is still eligible to be *sent* to DT One (i.e.
+  // has no supplier_reference yet) is enforced atomically by
+  // claim_topup_fulfillment inside runLiveManualFulfillment, not here. This
+  // shared preparation step also backs dry_run and check_status, and
+  // check_status specifically needs to run *after* a supplier_reference
+  // already exists in order to reconcile it.
 
   if (!order.product_id) {
     return {
@@ -493,6 +515,7 @@ async function prepareFulfillment(
         product,
         buildDtOneMobileNumber(recipientPhone),
         buildExternalId(order.id),
+        Number(order.amount_usd),
       ),
     },
   };
@@ -521,24 +544,94 @@ async function runLiveManualFulfillment(
     };
   }
 
+  // Atomic claim: this is the single gate that prevents duplicate DT One
+  // sends. It only succeeds for a row that is still paid, not_sent, and has
+  // no supplier_reference yet, and it stamps supplier_reference with the
+  // deterministic external id *before* DT One is ever called. Concurrent or
+  // retried calls that lose the claim never reach callDtOne.
+  const claim = await claimTopUpFulfillment(
+    baseUrl,
+    serviceRoleKey,
+    prepared.order.id,
+    prepared.externalId,
+  );
+
+  if (!claim.ok) {
+    return {
+      ok: false,
+      httpStatus: 500,
+      response: errorResponse(
+        prepared.order.id,
+        false,
+        "FULFILLMENT_CLAIM_FAILED",
+        "Failed to atomically claim this order for fulfillment. No DT One request was sent.",
+        true,
+      ),
+    };
+  }
+
+  if (!claim.claimed) {
+    const current =
+      (await fetchTopUpOrderById(baseUrl, serviceRoleKey, prepared.order.id)) ??
+      prepared.order;
+
+    return {
+      ok: false,
+      httpStatus: 409,
+      response: errorResponse(
+        prepared.order.id,
+        false,
+        "FULFILLMENT_ALREADY_CLAIMED",
+        `This order is already claimed or resolved (supplier_status=${current.supplier_status}). No new DT One request was sent.`,
+        true,
+      ),
+    };
+  }
+
+  const claimedOrder = claim.row;
+
   let dtoneResponse;
   try {
     dtoneResponse = await callDtOne(prepared.payloadPreview, dtoneConfig);
   } catch (error) {
+    // Ambiguous outcome: we don't know if DT One received the request. Leave
+    // the order in 'pending' (not 'failed') with the claimed reference
+    // intact so an admin can reconcile it via check_status instead of it
+    // being either silently marked failed or stuck in 'processing' forever.
+    const finalize = await finalizeTopUpFulfillment(baseUrl, serviceRoleKey, claimedOrder.id, {
+      supplier_status: "pending",
+      status: "processing",
+      supplier_reference: null,
+    });
+
+    if (!finalize.ok || !finalize.finalized) {
+      return buildFinalizeFailureResponse(prepared.order.id, true);
+    }
+
     return {
       ok: false,
       httpStatus: 502,
       response: errorResponse(
         prepared.order.id,
         false,
-        "DTONE_REQUEST_FAILED",
-        getSafeErrorMessage(error),
+        "FULFILLMENT_UNCONFIRMED",
+        `DT One request could not be confirmed (${getSafeErrorMessage(error)}). Order was claimed and left pending; use Check Status to reconcile before retrying.`,
         true,
       ),
     };
   }
 
   if (!dtoneResponse.ok) {
+    const finalize = await finalizeTopUpFulfillment(baseUrl, serviceRoleKey, claimedOrder.id, {
+      supplier_status: "failed",
+      status: "failed",
+      supplier_reference: null,
+    });
+
+    if (!finalize.ok || !finalize.finalized) {
+      return buildFinalizeFailureResponse(prepared.order.id, true);
+    }
+
     return {
       ok: false,
       httpStatus: dtoneResponse.httpStatus,
@@ -558,6 +651,19 @@ async function runLiveManualFulfillment(
   }
 
   if (!dtoneResponse.body) {
+    // 2xx but unreadable body: DT One likely accepted the request, so this
+    // is ambiguous rather than a confirmed failure. Leave it pending for
+    // check_status reconciliation, same as the network-error branch above.
+    const finalize = await finalizeTopUpFulfillment(baseUrl, serviceRoleKey, claimedOrder.id, {
+      supplier_status: "pending",
+      status: "processing",
+      supplier_reference: null,
+    });
+
+    if (!finalize.ok || !finalize.finalized) {
+      return buildFinalizeFailureResponse(prepared.order.id, true);
+    }
+
     return {
       ok: false,
       httpStatus: 502,
@@ -565,7 +671,7 @@ async function runLiveManualFulfillment(
         prepared.order.id,
         false,
         "DTONE_INVALID_RESPONSE",
-        "DT One returned an invalid JSON response.",
+        "DT One returned an invalid JSON response. Order was claimed and left pending; use Check Status to reconcile before retrying.",
         true,
         {
           dtone_status: dtoneResponse.httpStatus,
@@ -577,14 +683,18 @@ async function runLiveManualFulfillment(
   }
 
   const summary = summarizeDtOneResponse(dtoneResponse);
-  const supplierReference = summary.reference ?? prepared.externalId;
+  const supplierReference = summary.reference ?? claimedOrder.supplier_reference ?? prepared.externalId;
 
   if (summary.outcome === "success") {
-    await updateTopUpOrder(baseUrl, serviceRoleKey, prepared.order.id, {
+    const finalize = await finalizeTopUpFulfillment(baseUrl, serviceRoleKey, claimedOrder.id, {
       supplier_status: "successful",
       status: "completed",
       supplier_reference: supplierReference,
     });
+
+    if (!finalize.ok || !finalize.finalized) {
+      return buildFinalizeFailureResponse(prepared.order.id, true);
+    }
 
     return {
       ok: true,
@@ -616,11 +726,15 @@ async function runLiveManualFulfillment(
   }
 
   if (summary.outcome === "pending") {
-    await updateTopUpOrder(baseUrl, serviceRoleKey, prepared.order.id, {
+    const finalize = await finalizeTopUpFulfillment(baseUrl, serviceRoleKey, claimedOrder.id, {
       supplier_status: "pending",
       status: "processing",
       supplier_reference: supplierReference,
     });
+
+    if (!finalize.ok || !finalize.finalized) {
+      return buildFinalizeFailureResponse(prepared.order.id, true);
+    }
 
     return {
       ok: true,
@@ -651,11 +765,15 @@ async function runLiveManualFulfillment(
     };
   }
 
-  await updateTopUpOrder(baseUrl, serviceRoleKey, prepared.order.id, {
+  const finalize = await finalizeTopUpFulfillment(baseUrl, serviceRoleKey, claimedOrder.id, {
     supplier_status: "failed",
     status: "failed",
     supplier_reference: supplierReference,
   });
+
+  if (!finalize.ok || !finalize.finalized) {
+    return buildFinalizeFailureResponse(prepared.order.id, true);
+  }
 
   return {
     ok: false,
@@ -666,6 +784,23 @@ async function runLiveManualFulfillment(
       "DTONE_REQUEST_FAILED",
       summary.message ?? "DT One rejected the manual fulfillment request.",
       true,
+    ),
+  };
+}
+
+function buildFinalizeFailureResponse(
+  targetId: string,
+  liveManual: boolean,
+): { ok: false; httpStatus: number; response: FulfillmentErrorResponse } {
+  return {
+    ok: false,
+    httpStatus: 500,
+    response: errorResponse(
+      targetId,
+      false,
+      "FULFILLMENT_FINALIZE_FAILED",
+      "The supplier call completed but the database could not be updated to reflect it. This requires manual review before any retry.",
+      liveManual,
     ),
   };
 }
@@ -799,11 +934,15 @@ async function runCheckStatusReconciliation(
     lookupSummary.externalId ?? lookupReference;
 
   if (lookupSummary.outcome === "success") {
-    await updateTopUpOrder(baseUrl, serviceRoleKey, prepared.order.id, {
+    const finalize = await finalizeTopUpFulfillment(baseUrl, serviceRoleKey, prepared.order.id, {
       supplier_status: "successful",
       status: "completed",
       supplier_reference: supplierReference,
     });
+
+    if (!finalize.ok || !finalize.finalized) {
+      return buildFinalizeFailureResponse(prepared.order.id, false);
+    }
 
     return {
       ok: true,
@@ -867,11 +1006,15 @@ async function runCheckStatusReconciliation(
     };
   }
 
-  await updateTopUpOrder(baseUrl, serviceRoleKey, prepared.order.id, {
+  const finalize = await finalizeTopUpFulfillment(baseUrl, serviceRoleKey, prepared.order.id, {
     supplier_status: "failed",
     status: "failed",
     supplier_reference: supplierReference,
   });
+
+  if (!finalize.ok || !finalize.finalized) {
+    return buildFinalizeFailureResponse(prepared.order.id, false);
+  }
 
   return {
     ok: true,
@@ -996,6 +1139,9 @@ function validateProductMapping(
   const mappedProductType = normalizeText(product.product_type);
   const mappedName = normalizeText(product.name);
   const mappedAmount = Number(product.amount_usd);
+  const usesRangedSourceAmount =
+    product.external_product_metadata?.fulfillment_mode ===
+    "ranged_source_amount";
   const isActive = product.active === true;
   const mappingExists =
     isActive && provider === "dtone" && Boolean(externalProductId);
@@ -1016,6 +1162,8 @@ function validateProductMapping(
     mappedName === expected.productName &&
     Number.isFinite(mappedAmount) &&
     mappedAmount === expected.amountUsd &&
+    (!usesRangedSourceAmount ||
+      (Number.isFinite(expected.amountUsd) && expected.amountUsd > 0)) &&
     (expected.productType !== "data" ||
       normalizeText(product.bundle_label) !== null);
 
@@ -1085,9 +1233,30 @@ function buildDtOnePayloadPreview(
   product: TopUpProductRow,
   recipientPhone: string,
   externalId: string,
-) {
+  amountUsd: number,
+): PreparedFulfillment["payloadPreview"] {
   // Future phase: this preview should remain the single source of truth for
   // the live DT One request body.
+  if (
+    product.external_product_metadata?.fulfillment_mode ===
+    "ranged_source_amount"
+  ) {
+    return {
+      product_id: normalizeText(product.external_product_id) ?? "",
+      credit_party_identifier: {
+        mobile_number: recipientPhone,
+      },
+      external_id: externalId,
+      calculation_mode: "SOURCE_AMOUNT",
+      source: {
+        unit_type: "CURRENCY",
+        unit: "USD",
+        amount: amountUsd,
+      },
+      auto_confirm: true,
+    };
+  }
+
   return {
     product_id: normalizeText(product.external_product_id) ?? "",
     credit_party_identifier: {
@@ -1724,7 +1893,61 @@ function firstBoolean(value: Record<string, unknown> | null, keys: string[]) {
   return null;
 }
 
-async function updateTopUpOrder(
+type ClaimResult =
+  | { ok: true; claimed: true; row: TopUpOrderRow }
+  | { ok: true; claimed: false }
+  | { ok: false };
+
+// Atomically claims a paid, never-attempted order via the
+// claim_topup_fulfillment RPC. Zero rows returned means someone else
+// already claimed it (or it's no longer eligible) -- this is the sole gate
+// that prevents duplicate DT One sends, so it must run and be checked
+// before callDtOne is ever invoked.
+async function claimTopUpFulfillment(
+  baseUrl: string,
+  serviceRoleKey: string,
+  orderId: string,
+  supplierReference: string,
+): Promise<ClaimResult> {
+  try {
+    const response = await fetch(`${baseUrl}/rest/v1/rpc/claim_topup_fulfillment`, {
+      method: "POST",
+      headers: buildServiceHeaders(serviceRoleKey),
+      body: JSON.stringify({
+        p_order_id: orderId,
+        p_supplier_reference: supplierReference,
+      }),
+    });
+
+    if (!response.ok) {
+      return { ok: false };
+    }
+
+    const rows = (await response.json().catch(() => null)) as TopUpOrderRow[] | null;
+    if (!rows) {
+      return { ok: false };
+    }
+
+    if (rows.length === 0) {
+      return { ok: true, claimed: false };
+    }
+
+    return { ok: true, claimed: true, row: rows[0] };
+  } catch {
+    return { ok: false };
+  }
+}
+
+type FinalizeResult =
+  | { ok: true; finalized: true; row: TopUpOrderRow }
+  | { ok: true; finalized: false }
+  | { ok: false };
+
+// Finalizes a claimed (or still-unconfirmed) fulfillment attempt via the
+// finalize_topup_fulfillment RPC. Zero rows returned means the row was
+// already resolved by a concurrent/earlier call -- callers must treat this
+// as a failure to persist, not silently report success to the admin.
+async function finalizeTopUpFulfillment(
   baseUrl: string,
   serviceRoleKey: string,
   orderId: string,
@@ -1733,16 +1956,34 @@ async function updateTopUpOrder(
     status: "processing" | "completed" | "failed";
     supplier_reference: string | null;
   },
-) {
-  await fetch(
-    `${baseUrl}/rest/v1/topup_orders?id=eq.${encodeURIComponent(orderId)}`,
-    {
-      method: "PATCH",
-      headers: {
-        ...buildServiceHeaders(serviceRoleKey),
-        Prefer: "return=minimal",
-      },
-      body: JSON.stringify(patch),
-    },
-  );
+): Promise<FinalizeResult> {
+  try {
+    const response = await fetch(`${baseUrl}/rest/v1/rpc/finalize_topup_fulfillment`, {
+      method: "POST",
+      headers: buildServiceHeaders(serviceRoleKey),
+      body: JSON.stringify({
+        p_order_id: orderId,
+        p_supplier_status: patch.supplier_status,
+        p_status: patch.status,
+        p_supplier_reference: patch.supplier_reference,
+      }),
+    });
+
+    if (!response.ok) {
+      return { ok: false };
+    }
+
+    const rows = (await response.json().catch(() => null)) as TopUpOrderRow[] | null;
+    if (!rows) {
+      return { ok: false };
+    }
+
+    if (rows.length === 0) {
+      return { ok: true, finalized: false };
+    }
+
+    return { ok: true, finalized: true, row: rows[0] };
+  } catch {
+    return { ok: false };
+  }
 }

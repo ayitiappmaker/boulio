@@ -111,12 +111,16 @@ Deno.serve(async (req) => {
     const authorization = req.headers.get('authorization');
     const accessToken = getBearerToken(authorization);
     if (!accessToken) {
-      return jsonResponse(403, ADMIN_ACCESS_DENIED, corsHeaders);
+      return jsonResponse(401, ADMIN_ACCESS_DENIED, corsHeaders);
     }
 
     console.error('ADMIN_STAGE_AUTH_USER');
-    const adminUser = await fetchAuthenticatedUser(baseUrl, serviceRoleKey, accessToken);
-    if (!adminUser || !isAdminAllowed(adminUser, adminEmails, adminUserIds)) {
+    const adminUser = await fetchVerifiedAdminUser(baseUrl, serviceRoleKey, accessToken);
+    if (!adminUser) {
+      return jsonResponse(401, ADMIN_ACCESS_DENIED, corsHeaders);
+    }
+
+    if (!isAdminAllowed(adminUser, adminEmails, adminUserIds)) {
       return jsonResponse(403, ADMIN_ACCESS_DENIED, corsHeaders);
     }
 
@@ -151,13 +155,14 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'list_logs') {
+      const logs = await fetchRecentFulfillmentLogs(baseUrl, serviceRoleKey);
       return jsonResponse(
         200,
         {
           ok: true,
           action: 'list_logs',
-          message: 'Audit logs temporarily disabled.',
-          logs: [],
+          message: 'Recent fulfillment audit rows loaded.',
+          logs,
         },
         corsHeaders,
       );
@@ -193,6 +198,9 @@ Deno.serve(async (req) => {
       mode: action,
     };
 
+    const targetId = body.target_id;
+    const orderBefore = await fetchTopUpOrderById(baseUrl, serviceRoleKey, targetId);
+
     console.error('ADMIN_STAGE_FORWARD');
     try {
       const forwardedResponse = await fetch(`${baseUrl}/functions/v1/fulfill-topup`, {
@@ -210,6 +218,21 @@ Deno.serve(async (req) => {
       const rawText = await forwardedResponse.text();
       const forwardedBody = parseJsonRecord(rawText);
       if (!forwardedBody) {
+        await insertFulfillmentActionLog(baseUrl, serviceRoleKey, {
+          adminUserId: adminUser.id,
+          adminEmail: adminUser.email,
+          action,
+          targetType: 'topup_order',
+          targetId,
+          orderBefore,
+          orderAfter: orderBefore,
+          response: {
+            ok: false,
+            code: 'ADMIN_FORWARD_INVALID_RESPONSE',
+            message: 'Fulfillment service returned an invalid response.',
+          },
+        });
+
         return jsonResponse(
           502,
           {
@@ -220,19 +243,41 @@ Deno.serve(async (req) => {
           corsHeaders,
         );
       }
+
+      const orderAfter = await fetchTopUpOrderById(baseUrl, serviceRoleKey, targetId);
+      await insertFulfillmentActionLog(baseUrl, serviceRoleKey, {
+        adminUserId: adminUser.id,
+        adminEmail: adminUser.email,
+        action,
+        targetType: 'topup_order',
+        targetId,
+        orderBefore,
+        orderAfter,
+        response: forwardedBody,
+      });
+
       return jsonResponse(forwardedResponse.status, forwardedBody, corsHeaders);
     } catch (error) {
+      const failureResponse = {
+        ok: false,
+        code: 'ADMIN_FORWARD_REQUEST_FAILED',
+        message: 'Fulfillment service request failed.',
+        error_message: truncateSafe(getSafeErrorMessage(error), 240),
+      };
+
+      await insertFulfillmentActionLog(baseUrl, serviceRoleKey, {
+        adminUserId: adminUser.id,
+        adminEmail: adminUser.email,
+        action,
+        targetType: 'topup_order',
+        targetId,
+        orderBefore,
+        orderAfter: orderBefore,
+        response: failureResponse,
+      });
+
       console.error('ADMIN_STAGE_FORWARD');
-      return jsonResponse(
-        502,
-        {
-          ok: false,
-          code: 'ADMIN_FORWARD_REQUEST_FAILED',
-          message: 'Fulfillment service request failed.',
-          error_message: truncateSafe(getSafeErrorMessage(error), 240),
-        },
-        corsHeaders,
-      );
+      return jsonResponse(502, failureResponse, corsHeaders);
     }
   } catch (error) {
     console.error('ADMIN_STAGE_FORWARD');
@@ -249,7 +294,10 @@ Deno.serve(async (req) => {
   }
 });
 
-async function fetchAuthenticatedUser(
+// Verifies the bearer token server-side against Supabase Auth (does not
+// trust any client- or self-decoded JWT payload). Returns the verified user
+// only when Supabase confirms the token is a currently valid session.
+async function fetchVerifiedAdminUser(
   baseUrl: string,
   serviceRoleKey: string,
   accessToken: string,
@@ -261,19 +309,17 @@ async function fetchAuthenticatedUser(
         Authorization: `Bearer ${accessToken}`,
       },
     });
+
     if (!response.ok) {
       return null;
     }
 
-    const user: unknown = await response.json();
-    if (!isPlainRecord(user) || typeof user.id !== 'string' || !user.id.trim()) {
+    const data = (await response.json().catch(() => null)) as SupabaseUser | null;
+    if (!data || typeof data.id !== 'string' || !data.id.trim()) {
       return null;
     }
 
-    return {
-      id: user.id,
-      email: typeof user.email === 'string' ? user.email : null,
-    };
+    return data;
   } catch {
     return null;
   }
@@ -447,6 +493,52 @@ async function insertFulfillmentActionLog(
   };
 }
 
+function normalizeText(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function getSafeErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+
+  if (typeof error === 'string' && error.trim()) {
+    return error.trim();
+  }
+
+  return 'Unknown error';
+}
+
+function truncateSafe(value: string, maxLength: number) {
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  if (maxLength <= 3) {
+    return value.slice(0, Math.max(0, maxLength));
+  }
+
+  return `${value.slice(0, maxLength - 3)}...`;
+}
+
+function parseJsonRecord(value: string): Record<string, unknown> | null {
+  if (!value.trim()) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 function sanitizeForAudit(value: unknown, depth = 0): unknown {
   if (value == null) {
     return null;
@@ -487,6 +579,10 @@ function sanitizeForAudit(value: unknown, depth = 0): unknown {
   }
 
   return result;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function isSensitiveKey(key: string) {
@@ -535,24 +631,15 @@ function parseAdminEmails(value: string | undefined) {
 }
 
 function parseAdminUserIds(value: string | undefined) {
-  const userIds = (value ?? '')
+  return (value ?? '')
     .split(',')
     .map((userId) => userId.trim())
     .filter((userId) => isUuid(userId));
-
-  // Temporary fallback until FULFILLMENT_ADMIN_USER_IDS secret is set.
-  if (!userIds.includes(TEMPORARY_ADMIN_USER_ID_FALLBACK)) {
-    userIds.push(TEMPORARY_ADMIN_USER_ID_FALLBACK);
-  }
-
-  return userIds;
 }
 
 function isAdminEmail(email: string, allowedEmails: string[]) {
   return allowedEmails.includes(email.trim().toLowerCase());
 }
-
-const TEMPORARY_ADMIN_USER_ID_FALLBACK = '163be4e0-3cc2-4872-838d-48d999177da9';
 
 function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -583,43 +670,4 @@ function jsonResponse(status: number, body: unknown, headers: Record<string, str
       ...JSON_HEADERS,
     },
   });
-}
-
-function normalizeText(value: string | null | undefined) {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function parseJsonRecord(value: string): Record<string, unknown> | null {
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return isPlainRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function truncateSafe(value: string | null | undefined, maxLength: number) {
-  const text = value?.trim() ?? '';
-  if (!text) {
-    return null;
-  }
-
-  return text.length <= maxLength ? text : `${text.slice(0, maxLength)}...`;
-}
-
-function getSafeErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return truncateSafe(error.message, 200) ?? 'Admin fulfillment action failed.';
-  }
-
-  if (typeof error === 'string' && error.trim()) {
-    return truncateSafe(error, 200) ?? 'Admin fulfillment action failed.';
-  }
-
-  return 'Admin fulfillment action failed.';
 }

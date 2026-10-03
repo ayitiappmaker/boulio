@@ -1,5 +1,4 @@
 import { getCurrentSession } from '@/lib/auth';
-import { fetchMyProfile } from '@/lib/profile';
 import { assertProfileCompleteForService } from '@/lib/profile';
 import { isSupabaseConfigured, supabase } from '@/lib/supabase';
 import type { TopUpCarrier } from '@/lib/types';
@@ -61,12 +60,8 @@ export type PublicDataRequestLookup = {
 };
 
 export type CreateDataRequestInput = {
+  productId: string;
   recipientPhone: string;
-  carrier: TopUpCarrier;
-  productName: string;
-  bundleLabel?: string | null;
-  amountUsd: number;
-  serviceFeeUsd: number;
 };
 
 type DataRequestRow = {
@@ -106,25 +101,10 @@ export async function createDataRequest(input: CreateDataRequestInput): Promise<
     throw new Error('Supabase is not configured.');
   }
 
-  const profile = await fetchMyProfile();
-
-  const { data, error } = await supabase
-    .from('data_requests')
-    .insert({
-      requester_user_id: session.user.id,
-      requester_mode: profile?.userMode ?? 'haiti_user',
-      recipient_phone: input.recipientPhone,
-      carrier: normalizeCarrier(input.carrier),
-      product_type: 'data',
-      product_name: input.productName,
-      bundle_label: input.bundleLabel ?? null,
-      amount_usd: input.amountUsd,
-      service_fee_usd: input.serviceFeeUsd,
-    })
-    .select(
-      'id, requester_user_id, requester_mode, recipient_phone, carrier, product_type, product_name, bundle_label, amount_usd, service_fee_usd, total_usd, request_code, public_status, internal_status, payment_status, fulfillment_status, supporter_user_id, supporter_email, completed_order_id, expires_at, created_at, updated_at'
-    )
-    .single();
+  const { data, error } = await supabase.rpc('create_data_request', {
+    p_product_id: input.productId,
+    p_recipient_phone: input.recipientPhone,
+  });
 
   if (error) {
     throw new Error(error.message);
@@ -282,10 +262,6 @@ function mapDataRequestRow(row: DataRequestRow): DataRequestRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
-}
-
-function normalizeCarrier(carrier: TopUpCarrier): 'digicel' | 'natcom' {
-  return carrier === 'Digicel' ? 'digicel' : 'natcom';
 }
 
 async function fetchOpenDataRequestByCode(requestCode: string) {
