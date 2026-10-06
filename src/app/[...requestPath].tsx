@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { usePathname } from 'expo-router';
 
 import { PrimaryButton } from '@/components/PrimaryButton';
@@ -7,8 +7,9 @@ import { SectionCard } from '@/components/SectionCard';
 import { Colors, Radius, Spacing } from '@/constants/theme';
 import { fetchPublicDataRequestByCode, type DataRequestRecord, type PublicDataRequestLookup } from '@/lib/dataRequests';
 import { formatServiceTotal } from '@/lib/paymentFlow';
-import { createPaymentForDataRequest, openCheckoutUrl } from '@/lib/payments';
-import { t, useLanguage } from '@/lib/i18n';
+import { createPaymentForTopUpOrder, openCheckoutUrl } from '@/lib/payments';
+import { claimDataRequestForCheckout } from '@/lib/topupOrders';
+import { t, useLanguage, type TranslationKey } from '@/lib/i18n';
 import { analyticsCarrier, trackAnalyticsEvent } from '@/lib/analytics';
 
 type RequestPageState = {
@@ -25,7 +26,9 @@ export default function PublicRequestReviewScreen() {
     lookup: null,
     request: null,
   });
-  const [paymentNotice, setPaymentNotice] = useState<string | null>(null);
+  const [paymentNotice, setPaymentNotice] = useState<TranslationKey | null>(null);
+  const [senderPhone, setSenderPhone] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const trackedViewedRequestId = useRef<string | null>(null);
 
   useEffect(() => {
@@ -59,7 +62,7 @@ export default function PublicRequestReviewScreen() {
             loading: false,
             lookup: {
               status: 'unavailable',
-              message: error instanceof Error ? error.message : t('requestCouldNotBeLoaded'),
+              message: t('requestCouldNotBeLoaded'),
               request: null,
             },
             request: null,
@@ -72,8 +75,15 @@ export default function PublicRequestReviewScreen() {
     };
   }, [pathname]);
 
-  const handlePaymentComingSoon = async () => {
-    if (request) {
+  const handleContinueToPay = async () => {
+    if (!request?.productId || !isValidInternationalPhone(senderPhone)) {
+      setPaymentNotice('internationalPhoneHint');
+      return;
+    }
+
+    setSubmitting(true);
+    setPaymentNotice(null);
+    try {
       trackAnalyticsEvent('request_payment_started', {
         carrier: analyticsCarrier(request.carrier),
         price_usd: request.totalUsd,
@@ -83,19 +93,21 @@ export default function PublicRequestReviewScreen() {
         carrier: analyticsCarrier(request.carrier),
         price_usd: request.totalUsd,
       });
-    }
-
-    try {
-      const requestCode = request?.requestCode ?? getRequestCodeFromPath(pathname) ?? '';
-      const result = await createPaymentForDataRequest(requestCode);
+      const order = await claimDataRequestForCheckout({
+        requestCode: request.requestCode,
+        senderPhone: senderPhone.trim(),
+      });
+      const result = await createPaymentForTopUpOrder(order.id);
       if (result.checkoutUrl) {
         await openCheckoutUrl(result.checkoutUrl);
         return;
       }
 
-      setPaymentNotice(result.message);
-    } catch {
-      setPaymentNotice(t('onlinePaymentWillBeConnectedSoon'));
+      setPaymentNotice('paymentCouldNotBeStarted');
+    } catch (error) {
+      setPaymentNotice('paymentCouldNotBeStarted');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -118,35 +130,51 @@ export default function PublicRequestReviewScreen() {
     <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
       <View style={styles.hero}>
         <Text style={styles.brand}>{t('appName')}</Text>
-        <Text style={styles.title}>Data request</Text>
-        <Text style={styles.subtitle}>Review the request and help this recipient stay connected.</Text>
+        <Text style={styles.title}>{t('sendTopUpTo')}</Text>
       </View>
 
       {state.loading ? (
-        <SectionCard title={t('loadingRequest')} subtitle={t('checkingRequestLink')}>
-          <Text style={styles.body}>{t('pleaseWaitLoadingRequestDetails')}</Text>
+        <SectionCard title={t('loadingRequest')} subtitle="">
         </SectionCard>
       ) : lookup?.status === 'found' && request ? (
         <>
-        <SectionCard title="Request details" subtitle="No sign-in or app install required.">
+        <SectionCard title={formatHaitiPhone(request.recipientPhone)} subtitle="">
             <View style={styles.summaryCard}>
-              <SummaryRow label="Recipient" value={formatHaitiPhone(request.recipientPhone)} />
-              <SummaryRow label="Carrier" value={formatCarrier(request.carrier)} />
-              <SummaryRow label="Bundle" value={request.bundleLabel ?? request.productName} />
-              <SummaryRow label="Recipient receives" value={request.bundleLabel ?? request.productName} />
-              <SummaryRow label="Price" value={formatServiceTotal(request.totalUsd)} strong />
+              <SummaryRow label={t('carrier')} value={formatCarrier(request.carrier)} />
+              <SummaryRow label={t('product')} value={request.productName} />
+              <SummaryRow label={t('recipientGets')} value={request.recipientBenefit} />
+              <SummaryRow label={request.productType === 'airtime' ? t('topUp') : t('bundle')} value={formatServiceTotal(request.amountUsd)} />
+              <SummaryRow label={t('serviceFee')} value={formatServiceTotal(request.serviceFeeUsd)} />
+              <SummaryRow label={t('total')} value={formatServiceTotal(request.totalUsd)} strong />
             </View>
-            {paymentNotice ? <Text style={styles.note}>{paymentNotice}</Text> : null}
+            {paymentNotice ? <Text style={styles.note}>{t(paymentNotice)}</Text> : null}
             </SectionCard>
 
-          <SectionCard title="Pay securely" subtitle="Secure payment powered by Stripe">
-            <PrimaryButton label="Pay request" onPress={handlePaymentComingSoon} style={styles.button} />
+          <SectionCard title={t('yourPhone')} subtitle="">
+            <TextInput
+              value={senderPhone}
+              onChangeText={(value) => {
+                setSenderPhone(value);
+                setPaymentNotice(null);
+              }}
+              placeholder="+1 812 555 0123"
+              placeholderTextColor={Colors.light.muted}
+              keyboardType="phone-pad"
+              textContentType="telephoneNumber"
+              autoComplete="tel"
+              style={styles.input}
+            />
+            <PrimaryButton
+              label={t('continue')}
+              onPress={() => void handleContinueToPay()}
+              disabled={submitting || !isValidInternationalPhone(senderPhone)}
+              style={styles.button}
+            />
           </SectionCard>
         </>
       ) : (
-        <SectionCard title={t('requestUnavailable')} subtitle={t('thisRequestLinkCannotBeUsedRightNow')}>
-          <Text style={styles.body}>{lookup?.message ?? t('requestLinkNotFound')}</Text>
-          <Text style={styles.note}>{t('thisRequestMayHaveExpired')}</Text>
+        <SectionCard title={t('requestUnavailable')} subtitle="">
+          <Text style={styles.body}>{getLookupMessage(lookup)}</Text>
           <PrimaryButton label={t('continue')} onPress={() => undefined} style={styles.button} />
         </SectionCard>
       )}
@@ -161,6 +189,21 @@ function getRequestCodeFromPath(pathname: string) {
   }
 
   return parts[1];
+}
+
+function getLookupMessage(lookup: PublicDataRequestLookup | null) {
+  switch (lookup?.status) {
+    case 'expired':
+      return t('requestHasExpired');
+    case 'cancelled':
+      return t('requestHasBeenCancelled');
+    case 'completed':
+      return t('requestHasAlreadyBeenCompleted');
+    case 'unavailable':
+      return t('requestNotAvailableRightNow');
+    default:
+      return t('requestLinkNotFound');
+  }
 }
 
 function SummaryRow({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
@@ -180,6 +223,13 @@ function formatHaitiPhone(phone: string) {
   const digits = phone.replace(/\D/g, '').replace(/^509/, '');
   if (digits.length !== 8) return phone;
   return `+509 ${digits.slice(0, 2)} ${digits.slice(2, 4)} ${digits.slice(4, 6)} ${digits.slice(6)}`;
+}
+
+function isValidInternationalPhone(phone: string) {
+  const trimmed = phone.trim();
+  if (!trimmed.startsWith('+')) return false;
+  const digits = trimmed.replace(/\D/g, '');
+  return digits.length >= 8 && digits.length <= 15;
 }
 
 const styles = StyleSheet.create({
@@ -262,5 +312,15 @@ const styles = StyleSheet.create({
   },
   button: {
     marginTop: Spacing.xs,
+  },
+  input: {
+    minHeight: 50,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.md,
+    fontSize: 16,
+    color: Colors.light.text,
+    backgroundColor: Colors.light.surface,
   },
 });

@@ -2,12 +2,14 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Radius, SHADOW, Spacing } from '@/constants/theme';
 import type { LotteryResult } from '@/lib/types';
+import { t, useLanguage } from '@/lib/i18n';
 
 type ResultCardProps = {
   results: LotteryResult[];
 };
 
 export function ResultCard({ results }: ResultCardProps) {
+  useLanguage();
   const [firstResult] = results;
 
   if (!firstResult) {
@@ -22,7 +24,7 @@ export function ResultCard({ results }: ResultCardProps) {
           <View style={styles.metaRow}>
             <View style={styles.dateAccent} />
             <Text style={styles.meta}>
-              {firstResult.date} · {firstResult.draw}
+              {firstResult.date} · {firstResult.draw === 'Midday' ? t('midday') : t('evening')}
             </Text>
           </View>
         </View>

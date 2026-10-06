@@ -1,22 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View, type ColorValue } from 'react-native';
-import { Tabs, usePathname, useRouter } from 'expo-router';
+import { Tabs, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PostHogProvider } from 'posthog-react-native';
 
 import { Colors, Spacing } from '@/constants/theme';
-import { getCurrentSession, subscribeToSessionChanges } from '@/lib/auth';
 import { hydrateLanguage, setLanguage, supportedLanguages, t, useLanguage } from '@/lib/i18n';
-import type { Session } from '@supabase/supabase-js';
 import { analyticsClient } from '@/lib/analytics';
 
 export default function RootLayout() {
-  const router = useRouter();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
   const hideTabs = pathname === '/login' || pathname.startsWith('/admin/') || pathname === '/checkout-success';
-  const [session, setSession] = useState<Session | null>(null);
   const languageCode = useLanguage();
   const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
 
@@ -24,32 +20,6 @@ export default function RootLayout() {
     void hydrateLanguage();
   }, []);
 
-  useEffect(() => {
-    let active = true;
-
-    void getCurrentSession()
-      .then((nextSession) => {
-        if (active) {
-          setSession(nextSession);
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setSession(null);
-        }
-      });
-
-    const unsubscribe = subscribeToSessionChanges((nextSession) => {
-      setSession(nextSession);
-    });
-
-    return () => {
-      active = false;
-      unsubscribe();
-    };
-  }, []);
-
-  const accountTarget = session ? '/account' : '/login';
   const currentLanguage = supportedLanguages.find((language) => language.code === languageCode) ?? supportedLanguages[0];
 
   return (
@@ -64,9 +34,7 @@ export default function RootLayout() {
             <Text style={styles.languageChevron}>⌄</Text>
           </Pressable>
           <Text style={styles.brandName}>{t('appName')}</Text>
-          <Pressable accessibilityRole="button" onPress={() => router.push(accountTarget)} style={styles.accountButton}>
-            <Text style={styles.accountText}>{session ? t('account') : t('signIn')}</Text>
-          </Pressable>
+          <View style={styles.accountButton} />
         </View>
 
         <Tabs
@@ -132,6 +100,7 @@ export default function RootLayout() {
           <Tabs.Screen name="notifications" options={{ href: null }} />
           <Tabs.Screen name="account" options={{ href: null }} />
           <Tabs.Screen name="login" options={{ href: null }} />
+          <Tabs.Screen name="request/[code]" options={{ href: null }} />
           <Tabs.Screen name="[...requestPath]" options={{ href: null }} />
         </Tabs>
 
@@ -166,7 +135,7 @@ export default function RootLayout() {
                 })}
               </ScrollView>
               <Pressable accessibilityRole="button" onPress={() => setLanguagePickerOpen(false)} style={styles.closeButton}>
-                <Text style={styles.closeText}>Close</Text>
+                <Text style={styles.closeText}>{t('close')}</Text>
               </Pressable>
             </View>
           </Pressable>

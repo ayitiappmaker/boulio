@@ -20,7 +20,7 @@ type RouteParams = {
 
 export default function CheckoutSuccessScreen() {
   const router = useRouter();
-  useLanguage();
+  const language = useLanguage();
   const params = useLocalSearchParams<RouteParams>();
   const preferredOrderId =
     firstParam(params.orderId) ?? firstParam(params.order_id) ?? firstParam(params.target_id);
@@ -47,7 +47,7 @@ export default function CheckoutSuccessScreen() {
     };
   }, [preferredOrderId]);
 
-  const successSummary = useMemo(() => buildSuccessSummary(order), [order]);
+  const successSummary = useMemo(() => buildSuccessSummary(order), [language, order]);
 
   const detailRows = useMemo(() => {
     if (!order) {
@@ -61,7 +61,7 @@ export default function CheckoutSuccessScreen() {
       { label: t('totalPaid'), value: formatServiceTotal(order.totalUsd) },
       { label: t('status'), value: successSummary.statusLabel },
     ];
-  }, [order, successSummary.statusLabel]);
+  }, [language, order, successSummary.statusLabel]);
 
   return (
     <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>

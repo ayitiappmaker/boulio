@@ -5,7 +5,7 @@ import { useRouter } from 'expo-router';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { Colors, Radius, Spacing } from '@/constants/theme';
 import { sendPasswordResetEmail, signInWithEmailPassword, signUpWithEmailPassword } from '@/lib/auth';
-import { t, useLanguage } from '@/lib/i18n';
+import { t, useLanguage, type TranslationKey } from '@/lib/i18n';
 
 type AuthMode = 'signIn' | 'signUp' | 'resetPassword';
 
@@ -17,8 +17,8 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<TranslationKey | null>(null);
+  const [error, setError] = useState<TranslationKey | null>(null);
 
   const handleSubmit = async () => {
     setLoading(true);
@@ -33,13 +33,13 @@ export default function LoginScreen() {
           return;
         }
 
-        setMessage(t('checkYourInbox'));
+        setMessage('checkYourInbox');
         return;
       }
 
       if (mode === 'resetPassword') {
         await sendPasswordResetEmail(email.trim());
-        setMessage(t('checkYourInbox'));
+        setMessage('checkYourInbox');
         return;
       }
 
@@ -48,7 +48,7 @@ export default function LoginScreen() {
         router.replace('/account');
       }
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : t('useSupabaseEmailAndPassword'));
+      setError('authenticationFailed');
     } finally {
       setLoading(false);
     }
@@ -99,8 +99,8 @@ export default function LoginScreen() {
           ) : null}
         </View>
 
-        {error ? <Text style={styles.errorText}>{error}</Text> : null}
-        {message ? <Text style={styles.messageText}>{message}</Text> : null}
+        {error ? <Text style={styles.errorText}>{t(error)}</Text> : null}
+        {message ? <Text style={styles.messageText}>{t(message)}</Text> : null}
 
         <PrimaryButton
           label={submitLabel}

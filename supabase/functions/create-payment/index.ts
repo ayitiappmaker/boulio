@@ -27,7 +27,8 @@ type SupabaseUser = {
 
 type TopUpOrderRow = {
   id: string;
-  user_id: string;
+  user_id: string | null;
+  sender_phone: string | null;
   status: string;
   payment_status: string;
   total_usd: number | string;
@@ -107,14 +108,16 @@ Deno.serve(async (req) => {
   const authUser = accessToken ? await fetchAuthenticatedUser(baseUrl, serviceRoleKey, accessToken) : null;
 
   if (targetType === 'topup_order') {
-    if (!authUser) {
+    const order = await fetchTopUpOrderById(baseUrl, serviceRoleKey, targetId);
+    if (!order || !isEligibleTopUpOrder(order)) {
       return jsonResponse(200, PLACEHOLDER_RESPONSE, corsHeaders);
     }
 
-    const order = await fetchTopUpOrderById(baseUrl, serviceRoleKey, targetId);
-    if (!order || order.user_id !== authUser.id || !isEligibleTopUpOrder(order)) {
+    if (order.user_id && order.user_id !== authUser?.id) {
       return jsonResponse(200, PLACEHOLDER_RESPONSE, corsHeaders);
     }
+
+    const isRequestOrder = await isLinkedDataRequestOrder(baseUrl, serviceRoleKey, order.id);
 
     const totalUsd = parseMoney(order.total_usd);
     if (!Number.isFinite(totalUsd) || totalUsd <= 0) {
@@ -129,13 +132,13 @@ Deno.serve(async (req) => {
       productName: order.product_name,
       targetType,
       targetId: order.id,
-      metadata: {
+      metadata: compactMetadata({
         target_type: targetType,
         target_id: order.id,
-        user_id: authUser.id,
+        user_id: order.user_id,
         environment: stripeEnvironment,
-      },
-      customerEmail: authUser.email ?? undefined,
+      }),
+      idempotencyKey: isRequestOrder ? `boulio-request-order-${order.id}` : undefined,
     });
 
     if (!stripeSession) {
@@ -244,7 +247,7 @@ async function fetchAuthenticatedUser(baseUrl: string, serviceRoleKey: string, a
 
 async function fetchTopUpOrderById(baseUrl: string, serviceRoleKey: string, orderId: string) {
   const response = await fetch(
-    `${baseUrl}/rest/v1/topup_orders?id=eq.${encodeURIComponent(orderId)}&select=id,user_id,status,payment_status,total_usd,carrier,product_name,recipient_phone,recipient_name&limit=1`,
+    `${baseUrl}/rest/v1/topup_orders?id=eq.${encodeURIComponent(orderId)}&select=id,user_id,sender_phone,status,payment_status,total_usd,carrier,product_name,recipient_phone,recipient_name&limit=1`,
     {
       headers: buildServiceHeaders(serviceRoleKey),
     }
@@ -256,6 +259,20 @@ async function fetchTopUpOrderById(baseUrl: string, serviceRoleKey: string, orde
 
   const rows = (await response.json().catch(() => [])) as TopUpOrderRow[];
   return rows[0] ?? null;
+}
+
+async function isLinkedDataRequestOrder(baseUrl: string, serviceRoleKey: string, orderId: string) {
+  const response = await fetch(
+    `${baseUrl}/rest/v1/data_requests?completed_order_id=eq.${encodeURIComponent(orderId)}&select=id&limit=1`,
+    { headers: buildServiceHeaders(serviceRoleKey) }
+  );
+
+  if (!response.ok) {
+    return false;
+  }
+
+  const rows = (await response.json().catch(() => [])) as { id?: string }[];
+  return Boolean(rows[0]?.id);
 }
 
 async function fetchDataRequestByIdOrCode(baseUrl: string, serviceRoleKey: string, targetId: string) {
@@ -310,6 +327,7 @@ async function createStripeCheckoutSession({
   targetId,
   metadata,
   customerEmail,
+  idempotencyKey,
 }: {
   stripeSecretKey: string;
   successUrl: string;
@@ -320,6 +338,7 @@ async function createStripeCheckoutSession({
   targetId: string;
   metadata: Record<string, string>;
   customerEmail?: string;
+  idempotencyKey?: string;
 }) {
   const amountCents = Math.round(amountUsd * 100);
   if (!Number.isFinite(amountCents) || amountCents <= 0) {
@@ -350,6 +369,7 @@ async function createStripeCheckoutSession({
     headers: {
       Authorization: `Bearer ${stripeSecretKey}`,
       'Content-Type': 'application/x-www-form-urlencoded',
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
     },
     body: params.toString(),
   });
@@ -372,6 +392,12 @@ function buildProductName(targetType: PaymentTargetType, productName: string) {
 
 function parseMoney(value: number | string) {
   return typeof value === 'number' ? value : Number(value);
+}
+
+function compactMetadata(metadata: Record<string, string | null>) {
+  return Object.fromEntries(
+    Object.entries(metadata).filter((entry): entry is [string, string] => Boolean(entry[1]))
+  );
 }
 
 function buildServiceHeaders(serviceRoleKey: string) {

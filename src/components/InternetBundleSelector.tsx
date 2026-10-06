@@ -5,7 +5,7 @@ import { Colors, Radius, Spacing } from '@/constants/theme';
 import { ChipSelector } from '@/components/ChipSelector';
 import { TopUpAmountCard } from '@/components/TopUpAmountCard';
 import type { TopUpCarrier, TopUpProduct } from '@/lib/types';
-import { t } from '@/lib/i18n';
+import { t, useLanguage } from '@/lib/i18n';
 
 type CarrierFilter = 'All' | TopUpCarrier;
 
@@ -26,6 +26,7 @@ export function InternetBundleSelector({
   initialCarrierFilter = 'All',
   emptyMessage,
 }: InternetBundleSelectorProps) {
+  useLanguage();
   const [search, setSearch] = useState('');
   const [carrierFilter, setCarrierFilter] = useState<CarrierFilter>(initialCarrierFilter);
 
@@ -102,7 +103,7 @@ export function InternetBundleSelector({
 }
 
 function renderCarrierFilterLabel(value: CarrierFilter) {
-  return value;
+  return value === 'All' ? t('all') : value;
 }
 
 function formatAmount(value: number) {

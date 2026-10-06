@@ -1,6 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Radius, Spacing } from '@/constants/theme';
+import { t, useLanguage } from '@/lib/i18n';
 
 type AirtimeAmountCardProps = {
   amountUsd: number;
@@ -10,6 +11,7 @@ type AirtimeAmountCardProps = {
 };
 
 export function AirtimeAmountCard({ amountUsd, serviceFeeUsd, selected, onPress }: AirtimeAmountCardProps) {
+  useLanguage();
   const totalUsd = amountUsd + serviceFeeUsd;
 
   return (
@@ -19,9 +21,9 @@ export function AirtimeAmountCard({ amountUsd, serviceFeeUsd, selected, onPress 
       style={({ pressed }) => [styles.card, selected && styles.selectedCard, pressed && styles.pressedCard]}>
       <View style={styles.content}>
         <Text style={styles.amount}>{formatCurrency(amountUsd)}</Text>
-        <Text style={styles.meta}>Airtime</Text>
-        <Text style={styles.meta}>{`Fee ${formatCurrency(serviceFeeUsd)}`}</Text>
-        <Text style={styles.total}>{`Total ${formatCurrency(totalUsd)}`}</Text>
+        <Text style={styles.meta}>{t('airtime')}</Text>
+        <Text style={styles.meta}>{`${t('serviceFee')} ${formatCurrency(serviceFeeUsd)}`}</Text>
+        <Text style={styles.total}>{`${t('total')} ${formatCurrency(totalUsd)}`}</Text>
       </View>
     </Pressable>
   );

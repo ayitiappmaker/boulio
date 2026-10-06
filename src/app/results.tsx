@@ -7,19 +7,19 @@ import { Colors, Radius, Spacing } from '@/constants/theme';
 import { historyResults, lotteryStates } from '@/lib/mockData';
 import { applyLotteryFilters, fetchLotteryResults, type LotteryResultsDateFilter, type LotteryResultsFilters } from '@/lib/publicData';
 import { t, useLanguage } from '@/lib/i18n';
-import type { LotteryDraw, LotteryGame, LotteryResult, LotteryState } from '@/lib/types';
+import type { LotteryGame, LotteryResult, LotteryState } from '@/lib/types';
 
 type DateFilter = LotteryResultsDateFilter;
-type GameFilter = LotteryGame | 'All';
-type StateFilter = LotteryState | 'All';
-type DrawFilter = LotteryDraw | 'All';
+type GameFilter = LotteryGame | 'all';
+type StateFilter = LotteryState | 'all';
+type DrawFilter = 'all' | 'midday' | 'evening';
 
 export default function ResultsScreen() {
   useLanguage();
 
-  const [stateFilter, setStateFilter] = useState<StateFilter>('All');
-  const [gameFilter, setGameFilter] = useState<GameFilter>('All');
-  const [drawFilter, setDrawFilter] = useState<DrawFilter>('All');
+  const [stateFilter, setStateFilter] = useState<StateFilter>('all');
+  const [gameFilter, setGameFilter] = useState<GameFilter>('all');
+  const [drawFilter, setDrawFilter] = useState<DrawFilter>('all');
   const [dateFilter] = useState<DateFilter>('Any');
   const [pickDate, setPickDate] = useState('');
   const [results, setResults] = useState<ReturnType<typeof applyLotteryFilters>>(
@@ -28,7 +28,12 @@ export default function ResultsScreen() {
 
   useEffect(() => {
     let active = true;
-    const filters: LotteryResultsFilters = { state: stateFilter, game: gameFilter, draw: drawFilter, date: dateFilter };
+    const filters: LotteryResultsFilters = {
+      state: stateFilter === 'all' ? 'All' : stateFilter,
+      game: gameFilter === 'all' ? 'All' : gameFilter,
+      draw: drawFilter === 'all' ? 'All' : drawFilter === 'midday' ? 'Midday' : 'Evening',
+      date: dateFilter,
+    };
 
     void fetchLotteryResults(filters).then((nextResults) => {
       if (active) setResults(nextResults);
@@ -48,17 +53,17 @@ export default function ResultsScreen() {
       <View style={styles.content}>
         <View style={styles.hero}>
           <Text style={styles.title}>{t('results')}</Text>
-          <Text style={styles.subtitle}>Latest draw results in one place.</Text>
+          <Text style={styles.subtitle}>{t('latestDrawResultsOnePlace')}</Text>
         </View>
 
         <View style={styles.selectorSection}>
-          <Text style={styles.eyebrow}>Select state</Text>
+          <Text style={styles.eyebrow}>{t('selectState')}</Text>
           <ScrollView horizontal contentContainerStyle={styles.stateRow} showsHorizontalScrollIndicator={false}>
-            {(['All', ...lotteryStates] as const).map((state) => {
+            {(['all', ...lotteryStates] as const).map((state) => {
               const selected = stateFilter === state;
               return (
                 <Pressable key={state} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => setStateFilter(state)} style={[styles.statePill, selected && styles.statePillSelected]}>
-                  <Text style={[styles.stateLabel, selected && styles.stateLabelSelected]}>{state}</Text>
+                  <Text style={[styles.stateLabel, selected && styles.stateLabelSelected]}>{state === 'all' ? t('all') : state}</Text>
                 </Pressable>
               );
             })}
@@ -67,17 +72,17 @@ export default function ResultsScreen() {
 
         <View style={styles.refineCard}>
           <View style={styles.refineHeader}>
-            <Text style={styles.refineTitle}>Refine results</Text>
-            <Text style={styles.resultCount}>{visibleResults.length} {visibleResults.length === 1 ? 'result' : 'results'}</Text>
+            <Text style={styles.refineTitle}>{t('refineResults')}</Text>
+            <Text style={styles.resultCount}>{t(visibleResults.length === 1 ? 'resultCount' : 'resultsCount', { count: visibleResults.length })}</Text>
           </View>
-          <TextInput value={pickDate} onChangeText={setPickDate} placeholder="Draw date · YYYY-MM-DD" placeholderTextColor={Colors.light.textTertiary} style={styles.input} />
+          <TextInput value={pickDate} onChangeText={setPickDate} placeholder={t('drawDatePlaceholder')} placeholderTextColor={Colors.light.textTertiary} style={styles.input} />
           <View style={styles.filterGroup}>
             <Text style={styles.filterLabel}>{t('game')}</Text>
-            <ChipSelector value={gameFilter} options={['All', 'Pick 3', 'Pick 4'] as const} onChange={setGameFilter} />
+            <ChipSelector value={gameFilter} options={['all', 'Pick 3', 'Pick 4'] as const} onChange={setGameFilter} renderLabel={(value) => value === 'all' ? t('all') : value} />
           </View>
           <View style={styles.filterGroup}>
             <Text style={styles.filterLabel}>{t('draw')}</Text>
-            <ChipSelector value={drawFilter} options={['All', 'Midday', 'Evening'] as const} onChange={setDrawFilter} />
+            <ChipSelector value={drawFilter} options={['all', 'midday', 'evening'] as const} onChange={setDrawFilter} renderLabel={(value) => value === 'all' ? t('all') : value === 'midday' ? t('midday') : t('evening')} />
           </View>
         </View>
 
@@ -88,8 +93,8 @@ export default function ResultsScreen() {
         ) : (
           <View style={styles.emptyState}>
             <View style={styles.emptyIndicator} />
-            <Text style={styles.emptyTitle}>Results not posted yet</Text>
-            <Text style={styles.emptyBody}>Check back after the draw.</Text>
+            <Text style={styles.emptyTitle}>{t('resultsNotPostedYet')}</Text>
+            <Text style={styles.emptyBody}>{t('checkBackAfterDraw')}</Text>
           </View>
         )}
       </View>

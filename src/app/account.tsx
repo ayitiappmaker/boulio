@@ -13,7 +13,7 @@ import { fetchMyActivity } from '@/lib/activity';
 import { deleteSavedRecipient, fetchSavedRecipients, type SavedRecipientRecord } from '@/lib/savedRecipients';
 import type { DataRequestRecord } from '@/lib/dataRequests';
 import { getFulfillmentStatusLabel, getTopUpOrderCustomerSummary } from '@/lib/fulfillment';
-import { getLanguage, supportedLanguages, setLanguage, t, useLanguage } from '@/lib/i18n';
+import { getLanguage, supportedLanguages, setLanguage, t, useLanguage, type TranslationKey } from '@/lib/i18n';
 import { fetchMyProfile, isProfileRequiredError, upsertMyProfile, type ProfileRecord } from '@/lib/profile';
 import { getStoredUserMode, setStoredUserMode, subscribeToUserModeChanges } from '@/lib/userMode';
 import type { TopUpOrderRecord } from '@/lib/topupOrders';
@@ -39,8 +39,8 @@ export default function AccountScreen() {
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileEditing, setProfileEditing] = useState(false);
-  const [profileMessage, setProfileMessage] = useState<string | null>(null);
-  const [profileError, setProfileError] = useState<string | null>(null);
+  const [profileMessage, setProfileMessage] = useState<TranslationKey | null>(null);
+  const [profileError, setProfileError] = useState<TranslationKey | null>(null);
   const [profileForm, setProfileForm] = useState<ProfileFormValues>({
     fullName: '',
     phoneNumber: '',
@@ -260,7 +260,7 @@ export default function AccountScreen() {
       !profileForm.country.trim() ||
       !profileForm.userMode
     ) {
-      setProfileError(t('profileRequiredForService'));
+      setProfileError('profileRequiredForService');
       return;
     }
 
@@ -274,12 +274,12 @@ export default function AccountScreen() {
       setProfileForm(profileToFormValues(nextProfile));
       setStoredUserMode(nextProfile.userMode ?? getStoredUserMode());
       setProfileEditing(false);
-      setProfileMessage(t('profileSaved'));
+      setProfileMessage('profileSaved');
     } catch (error) {
       if (isProfileRequiredError(error)) {
-        setProfileError(t('profileRequiredForService'));
+        setProfileError('profileRequiredForService');
       } else {
-        setProfileError(error instanceof Error ? error.message : t('profileRequiredForService'));
+        setProfileError('profileSaveFailed');
       }
     } finally {
       setProfileSaving(false);
@@ -327,8 +327,8 @@ export default function AccountScreen() {
             <EmptyState title={t('completeProfile')} body={t('loadingProfile')} />
           ) : profileEditing || !isProfileCompleteRecord(profile) ? (
             <View style={styles.stack}>
-              {profileMessage ? <Text style={styles.successText}>{profileMessage}</Text> : null}
-              {profileError ? <Text style={styles.errorText}>{profileError}</Text> : null}
+              {profileMessage ? <Text style={styles.successText}>{t(profileMessage)}</Text> : null}
+              {profileError ? <Text style={styles.errorText}>{t(profileError)}</Text> : null}
               <CompleteProfileForm
                 values={profileForm}
                 onChange={(patch) => setProfileForm((current) => ({ ...current, ...patch }))}
@@ -345,7 +345,7 @@ export default function AccountScreen() {
             </View>
           ) : (
             <View style={styles.profileSummary}>
-              {profileMessage ? <Text style={styles.successText}>{profileMessage}</Text> : null}
+              {profileMessage ? <Text style={styles.successText}>{t(profileMessage)}</Text> : null}
               <SummaryRow label={t('fullName')} value={profile?.fullName || '—'} />
               <SummaryRow label={t('phoneNumber')} value={profile?.phoneNumber || '—'} />
               <SummaryRow label={t('country')} value={profile?.country || '—'} />

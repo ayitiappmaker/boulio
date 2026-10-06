@@ -41,7 +41,8 @@ type PaymentTargetType = 'topup_order' | 'data_request';
 
 type TopUpOrderRow = {
   id: string;
-  user_id: string;
+  data_request_id: string | null;
+  user_id: string | null;
   status: string;
   payment_status: string;
   supplier_status: string;
@@ -58,6 +59,7 @@ type DataRequestRow = {
   fulfillment_status: string;
   stripe_checkout_session_id: string | null;
   stripe_payment_intent_id: string | null;
+  completed_order_id: string | null;
 };
 
 const corsHeaders = {
@@ -146,6 +148,17 @@ async function handleCheckoutSessionCompleted(
   const paymentIntentId = normalizePaymentIntentId(eventObject.payment_intent);
 
   if (targetType === 'topup_order') {
+    const requestCheckoutPaid = await markDataRequestCheckoutPaid(
+      baseUrl,
+      serviceRoleKey,
+      targetId,
+      sessionId,
+      paymentIntentId
+    );
+    if (requestCheckoutPaid) {
+      return jsonResponse(200, { ok: true, code: 'ORDER_AND_REQUEST_UPDATED' }, corsHeaders);
+    }
+
     const order = await fetchTopUpOrderById(baseUrl, serviceRoleKey, targetId);
     if (!order) {
       return jsonResponse(200, { ok: true, code: 'IGNORED', message: 'Order not found.' }, corsHeaders);
@@ -153,6 +166,10 @@ async function handleCheckoutSessionCompleted(
 
     if (isPaidOrProcessingTopUpOrder(order)) {
       return jsonResponse(200, { ok: true, code: 'ALREADY_PROCESSED' }, corsHeaders);
+    }
+
+    if (order.data_request_id) {
+      return jsonResponse(200, { ok: true, code: 'REQUEST_CHECKOUT_STATE_CONFLICT' }, corsHeaders);
     }
 
     await updateTopUpOrder(baseUrl, serviceRoleKey, targetId, {
@@ -206,6 +223,17 @@ async function handlePaymentIntentSucceeded(
   const sessionId = metadata.checkout_session_id?.trim() ?? null;
 
   if (targetType === 'topup_order') {
+    const requestCheckoutPaid = await markDataRequestCheckoutPaid(
+      baseUrl,
+      serviceRoleKey,
+      targetId,
+      sessionId,
+      paymentIntentId
+    );
+    if (requestCheckoutPaid) {
+      return jsonResponse(200, { ok: true, code: 'ORDER_AND_REQUEST_UPDATED' }, corsHeaders);
+    }
+
     const order = await fetchTopUpOrderById(baseUrl, serviceRoleKey, targetId);
     if (!order) {
       return jsonResponse(200, { ok: true, code: 'IGNORED' }, corsHeaders);
@@ -213,6 +241,10 @@ async function handlePaymentIntentSucceeded(
 
     if (isPaidOrProcessingTopUpOrder(order)) {
       return jsonResponse(200, { ok: true, code: 'ALREADY_PROCESSED' }, corsHeaders);
+    }
+
+    if (order.data_request_id) {
+      return jsonResponse(200, { ok: true, code: 'REQUEST_CHECKOUT_STATE_CONFLICT' }, corsHeaders);
     }
 
     await updateTopUpOrder(baseUrl, serviceRoleKey, targetId, {
@@ -268,6 +300,20 @@ async function handlePaymentFailed(
       return jsonResponse(200, { ok: true, code: 'ALREADY_PROCESSED' }, corsHeaders);
     }
 
+    const linkedRequest = await fetchDataRequestByOrderId(baseUrl, serviceRoleKey, targetId);
+    if (linkedRequest) {
+      // A Checkout payment failure can still be retried in the same session.
+      // Keep the request claimed until success or definitive session expiry.
+      await updateTopUpOrder(baseUrl, serviceRoleKey, targetId, {
+        payment_status: 'unpaid',
+        status: 'pending_payment',
+        stripe_payment_intent_id:
+          normalizePaymentIntentId(eventObject.payment_intent) ?? order.stripe_payment_intent_id,
+        payment_provider: 'stripe',
+      });
+      return jsonResponse(200, { ok: true, code: 'REQUEST_PAYMENT_RETRYABLE' }, corsHeaders);
+    }
+
     await updateTopUpOrder(baseUrl, serviceRoleKey, targetId, {
       payment_status: 'failed',
       status: 'failed',
@@ -312,8 +358,21 @@ async function handleCheckoutExpired(
       return jsonResponse(200, { ok: true, code: 'ALREADY_PROCESSED' }, corsHeaders);
     }
 
-    // Top-up orders do not have an expired status yet, so we keep them
-    // pending/unpaid until the payment flow or schema changes later.
+    if (order.data_request_id) {
+      const released = await releaseDataRequestCheckoutClaim(
+        baseUrl,
+        serviceRoleKey,
+        targetId,
+        normalizeCheckoutSessionId(eventObject)
+      );
+      return jsonResponse(
+        200,
+        { ok: true, code: released ? 'REQUEST_CLAIM_RELEASED' : 'ALREADY_PROCESSED' },
+        corsHeaders
+      );
+    }
+
+    // Unlinked top-up orders retain their existing expiry behavior.
     return jsonResponse(200, { ok: true, code: 'ORDER_EXPIRED_IGNORED' }, corsHeaders);
   }
 
@@ -422,7 +481,7 @@ function timingSafeEqual(left: string, right: string) {
 
 async function fetchTopUpOrderById(baseUrl: string, serviceRoleKey: string, orderId: string) {
   const response = await fetch(
-    `${baseUrl}/rest/v1/topup_orders?id=eq.${encodeURIComponent(orderId)}&select=id,user_id,status,payment_status,supplier_status,stripe_checkout_session_id,stripe_payment_intent_id&limit=1`,
+    `${baseUrl}/rest/v1/topup_orders?id=eq.${encodeURIComponent(orderId)}&select=id,data_request_id,user_id,status,payment_status,supplier_status,stripe_checkout_session_id,stripe_payment_intent_id&limit=1`,
     {
       headers: buildServiceHeaders(serviceRoleKey),
     }
@@ -447,7 +506,7 @@ async function fetchDataRequestByIdOrCode(baseUrl: string, serviceRoleKey: strin
 
 async function fetchDataRequest(baseUrl: string, serviceRoleKey: string, filter: string) {
   const response = await fetch(
-    `${baseUrl}/rest/v1/data_requests?${filter}&select=id,request_code,public_status,internal_status,payment_status,fulfillment_status,stripe_checkout_session_id,stripe_payment_intent_id&limit=1`,
+    `${baseUrl}/rest/v1/data_requests?${filter}&select=id,request_code,public_status,internal_status,payment_status,fulfillment_status,stripe_checkout_session_id,stripe_payment_intent_id,completed_order_id&limit=1`,
     {
       headers: buildServiceHeaders(serviceRoleKey),
     }
@@ -459,6 +518,55 @@ async function fetchDataRequest(baseUrl: string, serviceRoleKey: string, filter:
 
   const rows = (await response.json().catch(() => [])) as DataRequestRow[];
   return rows[0] ?? null;
+}
+
+async function fetchDataRequestByOrderId(baseUrl: string, serviceRoleKey: string, orderId: string) {
+  return fetchDataRequest(baseUrl, serviceRoleKey, `completed_order_id=eq.${encodeURIComponent(orderId)}`);
+}
+
+async function markDataRequestCheckoutPaid(
+  baseUrl: string,
+  serviceRoleKey: string,
+  orderId: string,
+  sessionId: string | null,
+  paymentIntentId: string | null
+) {
+  return callBooleanRpc(baseUrl, serviceRoleKey, 'mark_data_request_checkout_paid', {
+    p_order_id: orderId,
+    p_stripe_checkout_session_id: sessionId,
+    p_stripe_payment_intent_id: paymentIntentId,
+  });
+}
+
+async function releaseDataRequestCheckoutClaim(
+  baseUrl: string,
+  serviceRoleKey: string,
+  orderId: string,
+  sessionId: string | null
+) {
+  return callBooleanRpc(baseUrl, serviceRoleKey, 'release_data_request_checkout_claim', {
+    p_order_id: orderId,
+    p_stripe_checkout_session_id: sessionId,
+  });
+}
+
+async function callBooleanRpc(
+  baseUrl: string,
+  serviceRoleKey: string,
+  functionName: string,
+  parameters: Record<string, string | null>
+) {
+  const response = await fetch(`${baseUrl}/rest/v1/rpc/${functionName}`, {
+    method: 'POST',
+    headers: buildServiceHeaders(serviceRoleKey),
+    body: JSON.stringify(parameters),
+  });
+
+  if (!response.ok) {
+    throw new Error(`RPC ${functionName} failed with status ${response.status}.`);
+  }
+
+  return (await response.json().catch(() => false)) === true;
 }
 
 async function updateTopUpOrder(

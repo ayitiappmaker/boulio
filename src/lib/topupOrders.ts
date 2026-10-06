@@ -1,7 +1,6 @@
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { topUpOrders as mockTopUpOrders } from '@/lib/mockData';
 import { getCurrentSession } from '@/lib/auth';
-import { assertProfileCompleteForService } from '@/lib/profile';
 import type { TopUpCarrier } from '@/lib/types';
 
 export type TopUpOrderStatus =
@@ -19,7 +18,9 @@ export type TopUpSupplierStatus = 'not_sent' | 'pending' | 'processing' | 'succe
 
 export type TopUpOrderRecord = {
   id: string;
+  userId: string | null;
   productId: string | null;
+  senderPhone: string | null;
   carrier: TopUpCarrier;
   productType: 'airtime' | 'data';
   productName: string;
@@ -39,12 +40,20 @@ export type TopUpOrderRecord = {
 export type CreatePendingTopUpOrderInput = {
   productId: string;
   recipientPhone: string;
+  senderPhone: string;
   recipientName?: string | null;
+};
+
+export type ClaimDataRequestForCheckoutInput = {
+  requestCode: string;
+  senderPhone: string;
 };
 
 type TopUpOrderRow = {
   id: string;
+  user_id: string | null;
   product_id: string | null;
+  sender_phone: string | null;
   carrier: TopUpCarrier;
   product_type: 'airtime' | 'data';
   product_name: string;
@@ -64,13 +73,6 @@ type TopUpOrderRow = {
 export async function createPendingTopUpOrder(
   input: CreatePendingTopUpOrderInput
 ): Promise<TopUpOrderRecord> {
-  const session = await getCurrentSession();
-  if (!session?.user?.id) {
-    throw new Error('Sign in is required before placing a top-up order.');
-  }
-
-  await assertProfileCompleteForService();
-
   if (!isSupabaseConfigured || !supabase) {
     throw new Error('Supabase is not configured.');
   }
@@ -78,7 +80,27 @@ export async function createPendingTopUpOrder(
   const { data, error } = await supabase.rpc('create_topup_order', {
     p_product_id: input.productId,
     p_recipient_phone: input.recipientPhone,
+    p_sender_phone: input.senderPhone,
     p_recipient_name: input.recipientName?.trim() || null,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return mapTopUpOrderRow(data as TopUpOrderRow);
+}
+
+export async function claimDataRequestForCheckout(
+  input: ClaimDataRequestForCheckoutInput
+): Promise<TopUpOrderRecord> {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+
+  const { data, error } = await supabase.rpc('claim_data_request_for_checkout', {
+    p_request_code: input.requestCode,
+    p_sender_phone: input.senderPhone,
   });
 
   if (error) {
@@ -101,7 +123,7 @@ export async function fetchMyTopUpOrders(): Promise<TopUpOrderRecord[]> {
   const { data, error } = await supabase
     .from('topup_orders')
     .select(
-      'id, product_id, carrier, product_type, product_name, recipient_phone, recipient_name, amount_usd, service_fee_usd, total_usd, status, payment_status, supplier_status, supplier_reference, created_at, updated_at'
+      'id, user_id, product_id, sender_phone, carrier, product_type, product_name, recipient_phone, recipient_name, amount_usd, service_fee_usd, total_usd, status, payment_status, supplier_status, supplier_reference, created_at, updated_at'
     )
     .order('created_at', { ascending: false });
 
@@ -115,7 +137,9 @@ export async function fetchMyTopUpOrders(): Promise<TopUpOrderRecord[]> {
 function mapTopUpOrderRow(row: TopUpOrderRow): TopUpOrderRecord {
   return {
     id: row.id,
+    userId: row.user_id,
     productId: row.product_id,
+    senderPhone: row.sender_phone,
     carrier: row.carrier,
     productType: row.product_type,
     productName: row.product_name,
@@ -136,7 +160,9 @@ function mapTopUpOrderRow(row: TopUpOrderRow): TopUpOrderRecord {
 function mapMockTopUpOrder(order: (typeof mockTopUpOrders)[number]): TopUpOrderRecord {
   return {
     id: order.id,
+    userId: null,
     productId: null,
+    senderPhone: null,
     carrier: order.carrier,
     productType: order.productType,
     productName: order.productLabel,

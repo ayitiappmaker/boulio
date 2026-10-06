@@ -160,8 +160,17 @@ function mapTopUpProductRow(row: TopUpProductRow): TopUpProduct {
     serviceFee,
     externalProvider: row.external_provider ?? null,
     externalProductId: row.external_product_id ?? null,
-    externalProductMetadata: row.external_product_metadata ?? null,
+    externalProductMetadata: toCustomerProductMetadata(row.external_product_metadata),
   };
+}
+
+function toCustomerProductMetadata(metadata: Record<string, unknown> | null | undefined) {
+  if (!metadata) {
+    return null;
+  }
+
+  const { supplier_cost_usd: _supplierCostUsd, ...customerMetadata } = metadata;
+  return customerMetadata;
 }
 
 function sortLotteryResults(results: LotteryResult[]) {

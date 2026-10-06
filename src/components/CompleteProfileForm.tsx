@@ -4,7 +4,7 @@ import { ChipSelector } from '@/components/ChipSelector';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { Colors, Radius, Spacing } from '@/constants/theme';
 import type { UserMode } from '@/lib/types';
-import { t } from '@/lib/i18n';
+import { t, useLanguage } from '@/lib/i18n';
 
 export type ProfileFormValues = {
   fullName: string;
@@ -30,6 +30,8 @@ export function CompleteProfileForm({
   submitLabel,
   helper,
 }: CompleteProfileFormProps) {
+  useLanguage();
+
   return (
     <View style={styles.stack}>
       {helper ? <Text style={styles.helper}>{helper}</Text> : null}
