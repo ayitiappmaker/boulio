@@ -98,12 +98,21 @@ When Stripe confirms payment:
 - `data_requests.public_status` becomes `paid`
 - `data_requests.internal_status` becomes `processing`
 
-That is enough to mark a record ready for fulfillment.
-No supplier request should happen in the webhook yet.
+When `FULFILLMENT_AUTO_SEND` is exactly `"true"`, that transition schedules a
+`live_auto` call to the shared fulfillment function
+with `EdgeRuntime.waitUntil`, allowing Stripe to receive its acknowledgement
+without waiting for DT One. The automatic call requires service-role
+authorization plus the server-held fulfillment secret.
 
-## What fulfillment will do later
+Automatic fulfillment is disabled by default. Unless the flag is exactly
+`"true"`, webhook scheduling does not call `fulfill-topup`, and a direct
+`live_auto` request is rejected with HTTP 403 and `AUTO_FULFILLMENT_DISABLED`.
+`live_manual`, `dry_run`, and `check_status` remain available regardless of
+the flag.
 
-In a future phase, the backend will:
+## What fulfillment does
+
+The trusted backend:
 - read paid and ready rows
 - create a supplier request on the server
 - store supplier response ids
@@ -137,13 +146,13 @@ The admin screen is manual-only:
 - it can run `check_status`
 - it writes a server-side audit row for each manual fulfillment action
 - it does not expose DT One credentials, admin secrets, or other sensitive values in logs
-- the current flow still does not automate Stripe webhook fulfillment
+- automatic fulfillment uses the same engine and atomic claim as this manual flow
 
-It does not automate Stripe webhook fulfillment.
-Stripe webhook handling remains unchanged.
+Manual actions remain available independently of automatic Stripe fulfillment.
 
-Audit logging lives in `public.fulfillment_action_logs` and is written from the
-server-side admin wrapper with service-role access.
+Audit logging lives in `public.fulfillment_action_logs`. Manual actions are
+written by the admin wrapper; `live_auto` actions are written by the shared
+fulfillment function with sanitized response fields.
 
 ## Exact product linkage
 
@@ -194,7 +203,6 @@ Status handling:
 - failure -> `supplier_status = failed`, `status = failed`
 
 The function returns only a safe summary of the DT One response.
-No automatic fulfillment is triggered from Stripe or anywhere else.
 Dry-run remains a safe preview only and never calls DT One.
 
 ## Manual status check
@@ -301,16 +309,9 @@ Use service language instead:
 - completed
 - needs review
 
-## Placeholder-only for now
+## Automatic handoff
 
-This phase only prepares the model for future fulfillment.
-It does not:
-- call DT One
-- send airtime
-- send mobile data
-- mark completion automatically
-
-The admin dashboard is now available as a manual operator tool, but it still does not automate fulfillment or move payment logic into the webhook.
-
-Real fulfillment is still disabled until the live DT One send path is added in
-a later phase.
+Only a Stripe webhook that transitions a specific order to paid schedules
+automatic fulfillment. There is no historical scan or replay. Duplicate Stripe
+events and concurrent invocations remain protected by
+`claim_topup_fulfillment`, which is the final gate before any DT One send.

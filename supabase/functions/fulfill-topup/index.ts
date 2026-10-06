@@ -1,6 +1,6 @@
 // Supabase Edge Function: fulfill-topup
 //
-// Dry-run fulfillment prep only plus a locked-down manual live path.
+// Shared fulfillment engine with locked-down manual and server-only automatic paths.
 // Required environment variables:
 // - SUPABASE_URL
 // - SUPABASE_SERVICE_ROLE_KEY
@@ -12,21 +12,28 @@
 // This function validates a paid top-up order, loads the exact mapped DT One
 // product, normalizes the recipient phone, and either:
 // - returns a safe preview of the payload that would be sent later, or
-// - when explicitly requested with live_manual and a matching admin secret,
+// - when explicitly requested with live_manual and a matching admin secret, or
+// - when requested with live_auto using both the secret and service-role auth,
 //   sends the real DT One request from the server.
 //
-// Every mode (dry_run, live_manual, check_status) requires a valid
+// Every mode (dry_run, live_manual, live_auto, check_status) requires a valid
 // x-fulfillment-admin-secret header matching FULFILLMENT_ADMIN_SECRET. This
-// function is only reachable in practice via admin-fulfillment-action, which
-// verifies the caller is a signed-in allowlisted admin before attaching this
-// secret server-side; the browser never sees it.
+// Manual modes are reached through admin-fulfillment-action, which verifies an
+// allowlisted admin. live_auto is reached only from the trusted Stripe webhook
+// and additionally requires service-role authorization. The browser never sees
+// either server-held credential.
 //
-// It never exposes DT One credentials to the client. It does not automate
-// fulfillment from Stripe and it does not mark orders completed unless DT One
-// returns a confirmed success response.
+// It never exposes DT One credentials to the client and does not mark orders
+// completed unless DT One returns a confirmed success response.
+
+import {
+  AUTOMATIC_FULFILLMENT_FLAG,
+  checkAutomaticFulfillmentGate,
+  hasServiceRoleAuthorization,
+} from "../_shared/automatic-fulfillment.ts";
 
 type FulfillmentTargetType = "topup_order" | "data_request";
-type FulfillmentMode = "dry_run" | "live_manual" | "check_status";
+type FulfillmentMode = "dry_run" | "live_manual" | "live_auto" | "check_status";
 
 type FulfillTopupRequest = {
   target_type?: FulfillmentTargetType;
@@ -112,7 +119,8 @@ type DryRunSuccessResponse = {
 type LiveManualSuccessResponse = {
   ok: true;
   dry_run: false;
-  live_manual: true;
+  live_manual?: true;
+  live_auto?: true;
   ready_for_fulfillment: true;
   target_type: "topup_order";
   target_id: string;
@@ -200,7 +208,8 @@ type FulfillmentErrorCode =
   | "DTONE_REQUEST_FAILED"
   | "DTONE_HTTP_ERROR"
   | "DTONE_INVALID_RESPONSE"
-  | "DTONE_TRANSACTION_NOT_FOUND";
+  | "DTONE_TRANSACTION_NOT_FOUND"
+  | "AUTO_FULFILLMENT_DISABLED";
 
 type FulfillmentErrorResponse = {
   ok: false;
@@ -279,6 +288,7 @@ Deno.serve(async (req) => {
     !targetId ||
     (mode !== "dry_run" &&
       mode !== "live_manual" &&
+      mode !== "live_auto" &&
       mode !== "check_status")
   ) {
     return jsonResponse(
@@ -287,7 +297,35 @@ Deno.serve(async (req) => {
         targetId ?? "unknown",
         false,
         "INVALID_REQUEST",
-        "target_type must be topup_order, mode must be dry_run, live_manual, or check_status, and target_id is required.",
+        "target_type must be topup_order, mode must be dry_run, live_manual, live_auto, or check_status, and target_id is required.",
+      ),
+      corsHeaders,
+    );
+  }
+
+  // Independent guard: live_auto stops here unless FULFILLMENT_AUTO_SEND is
+  // exactly "true", before any order lookup, readiness check, claim, or DT One
+  // call. Other modes, including live_manual, pass through unchanged.
+  const automaticGate = checkAutomaticFulfillmentGate(
+    mode,
+    Deno.env.get(AUTOMATIC_FULFILLMENT_FLAG),
+  );
+  if (!automaticGate.allowed) {
+    return jsonResponse(
+      automaticGate.httpStatus,
+      errorResponse(targetId, false, automaticGate.code, automaticGate.message),
+      corsHeaders,
+    );
+  }
+
+  if (mode === "live_auto" && !hasServiceRoleAuthorization(authorization, serviceRoleKey)) {
+    return jsonResponse(
+      403,
+      errorResponse(
+        targetId,
+        false,
+        "UNAUTHORIZED_ADMIN_SECRET_INVALID",
+        "Automatic fulfillment requires trusted server authentication.",
       ),
       corsHeaders,
     );
@@ -351,15 +389,19 @@ Deno.serve(async (req) => {
     targetId,
   );
   if ("error" in readiness) {
+    const response = errorResponse(
+      targetId,
+      mode === "dry_run",
+      readiness.error.code,
+      readiness.error.message,
+      mode === "live_manual",
+    );
+    if (mode === "live_auto") {
+      await insertAutomaticFulfillmentLog(baseUrl, serviceRoleKey, order, order, response);
+    }
     return jsonResponse(
       readiness.error.httpStatus,
-      errorResponse(
-        targetId,
-        mode === "dry_run",
-        readiness.error.code,
-        readiness.error.message,
-        mode === "live_manual",
-      ),
+      response,
       corsHeaders,
     );
   }
@@ -393,7 +435,12 @@ Deno.serve(async (req) => {
     baseUrl,
     serviceRoleKey,
     readiness.prepared,
+    mode,
   );
+  if (mode === "live_auto") {
+    const orderAfter = await fetchTopUpOrderById(baseUrl, serviceRoleKey, targetId);
+    await insertAutomaticFulfillmentLog(baseUrl, serviceRoleKey, order, orderAfter, liveResult.response);
+  }
   if (!liveResult.ok) {
     return jsonResponse(
       liveResult.httpStatus,
@@ -525,6 +572,7 @@ async function runLiveManualFulfillment(
   baseUrl: string,
   serviceRoleKey: string,
   prepared: PreparedFulfillment,
+  mode: "live_manual" | "live_auto",
 ): Promise<
   | { ok: true; response: LiveManualSuccessResponse }
   | { ok: false; httpStatus: number; response: FulfillmentErrorResponse }
@@ -701,7 +749,7 @@ async function runLiveManualFulfillment(
       response: {
         ok: true,
         dry_run: false,
-        live_manual: true,
+        ...(mode === "live_auto" ? { live_auto: true as const } : { live_manual: true as const }),
         ready_for_fulfillment: true,
         target_type: "topup_order",
         target_id: prepared.order.id,
@@ -741,7 +789,7 @@ async function runLiveManualFulfillment(
       response: {
         ok: true,
         dry_run: false,
-        live_manual: true,
+        ...(mode === "live_auto" ? { live_auto: true as const } : { live_manual: true as const }),
         ready_for_fulfillment: true,
         target_type: "topup_order",
         target_id: prepared.order.id,
@@ -1310,6 +1358,64 @@ function buildServiceHeaders(serviceRoleKey: string) {
   };
 }
 
+async function insertAutomaticFulfillmentLog(
+  baseUrl: string,
+  serviceRoleKey: string,
+  orderBefore: TopUpOrderRow,
+  orderAfter: TopUpOrderRow | null,
+  responseBody: Record<string, unknown>,
+) {
+  const dtoneTransactionId = firstNonEmptyString([
+    getTextAtPath(responseBody, ["dtone_transaction_id"]),
+    getTextAtPath(responseBody, ["dtone_response", "reference"]),
+    getTextAtPath(responseBody, ["dtone_status", "reference"]),
+  ]);
+
+  const payload = {
+    admin_user_id: null,
+    admin_email: null,
+    action: "live_auto",
+    target_type: "topup_order",
+    target_id: orderBefore.id,
+    order_status_before: orderBefore.status,
+    supplier_status_before: orderBefore.supplier_status,
+    order_status_after: orderAfter?.status ?? orderBefore.status,
+    supplier_status_after: orderAfter?.supplier_status ?? orderBefore.supplier_status,
+    ok: typeof responseBody.ok === "boolean" ? responseBody.ok : null,
+    response_code: toTextValue(responseBody.code),
+    response_message: truncateSafe(toTextValue(responseBody.message), 240),
+    supplier_reference: orderAfter?.supplier_reference ?? orderBefore.supplier_reference,
+    dtone_transaction_id: dtoneTransactionId,
+    safe_response: {
+      ok: payloadBoolean(responseBody.ok),
+      code: toTextValue(responseBody.code),
+      message: truncateSafe(toTextValue(responseBody.message), 240),
+      dtone_response: isPlainRecord(responseBody.dtone_response)
+        ? responseBody.dtone_response
+        : null,
+      dtone_status: responseBody.dtone_status ?? null,
+      dtone_transaction_id: dtoneTransactionId,
+      dtone_external_id: toTextValue(responseBody.dtone_external_id),
+      dtone_status_summary: truncateSafe(toTextValue(responseBody.dtone_status_summary), 240),
+    },
+  };
+
+  try {
+    const response = await fetch(`${baseUrl}/rest/v1/fulfillment_action_logs`, {
+      method: "POST",
+      headers: { ...buildServiceHeaders(serviceRoleKey), Prefer: "return=minimal" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) console.error("AUTO_FULFILLMENT_LOG_FAILED", response.status);
+  } catch {
+    console.error("AUTO_FULFILLMENT_LOG_FAILED");
+  }
+}
+
+function payloadBoolean(value: unknown) {
+  return typeof value === "boolean" ? value : null;
+}
+
 function jsonResponse(
   status: number,
   body: unknown,
@@ -1351,7 +1457,7 @@ function getDtoneConfig() {
   const password = Deno.env.get("DTONE_API_PASSWORD")?.trim();
   const transactionsPath = normalizeUrlPath(
     Deno.env.get("DTONE_TRANSACTIONS_PATH"),
-    "/transactions",
+    "/sync/transactions",
   );
   const transactionLookupPath = normalizeUrlPath(
     Deno.env.get("DTONE_TRANSACTION_LOOKUP_PATH"),

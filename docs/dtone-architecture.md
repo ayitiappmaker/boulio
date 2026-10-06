@@ -121,12 +121,19 @@ It does not:
 
 ## Fulfillment modes
 
-The `fulfill-topup` Edge Function supports three locked-down server-only modes
+The `fulfill-topup` Edge Function supports four locked-down server-only modes
 for top-up orders:
 
 - `dry_run`
 - `live_manual`
+- `live_auto`
 - `check_status`
+
+`live_auto` is disabled unless `FULFILLMENT_AUTO_SEND` is exactly `"true"`.
+While disabled, the Stripe webhook does not call `fulfill-topup`, and a direct
+`live_auto` request is rejected with HTTP 403 and `AUTO_FULFILLMENT_DISABLED`.
+`dry_run`, `live_manual`, and `check_status` remain available regardless of
+the flag.
 
 The browser never talks to DT One directly.
 If the admin screen needs to trigger a live action, it goes through the

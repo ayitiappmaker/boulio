@@ -9,7 +9,17 @@
 //
 // Stripe webhook events are the source of truth for payment completion once
 // test checkout is enabled. This function verifies the webhook signature,
-// applies idempotent status updates, and does not trigger fulfillment.
+// applies idempotent status updates, and schedules server-only fulfillment.
+
+import {
+  AUTOMATIC_FULFILLMENT_FLAG,
+  scheduleAutomaticFulfillmentRequest,
+  shouldScheduleAutomaticFulfillment,
+} from '../_shared/automatic-fulfillment.ts';
+
+declare const EdgeRuntime: {
+  waitUntil(promise: Promise<unknown>): void;
+};
 
 type StripeWebhookEvent =
   | 'checkout.session.completed'
@@ -46,6 +56,7 @@ type TopUpOrderRow = {
   status: string;
   payment_status: string;
   supplier_status: string;
+  supplier_reference: string | null;
   stripe_checkout_session_id: string | null;
   stripe_payment_intent_id: string | null;
 };
@@ -84,6 +95,7 @@ Deno.serve(async (req) => {
   const baseUrl = Deno.env.get('SUPABASE_URL')?.trim().replace(/\/$/, '');
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')?.trim();
   const webhookSecret = Deno.env.get('STRIPE_WEBHOOK_SECRET')?.trim();
+  const fulfillmentAdminSecret = Deno.env.get('FULFILLMENT_ADMIN_SECRET')?.trim();
   const expectedLivemode = parseExpectedLivemode(Deno.env.get('STRIPE_EXPECTED_LIVEMODE'));
 
   if (!baseUrl || !serviceRoleKey || !webhookSecret || expectedLivemode === null) {
@@ -119,9 +131,9 @@ Deno.serve(async (req) => {
 
   switch (event.type) {
     case 'checkout.session.completed':
-      return await handleCheckoutSessionCompleted(baseUrl, serviceRoleKey, eventObject, metadata, targetType, targetId, stripeEnvironment);
+      return await handleCheckoutSessionCompleted(baseUrl, serviceRoleKey, fulfillmentAdminSecret, eventObject, metadata, targetType, targetId, stripeEnvironment);
     case 'payment_intent.succeeded':
-      return await handlePaymentIntentSucceeded(baseUrl, serviceRoleKey, eventObject, metadata, targetType, targetId, stripeEnvironment);
+      return await handlePaymentIntentSucceeded(baseUrl, serviceRoleKey, fulfillmentAdminSecret, eventObject, metadata, targetType, targetId, stripeEnvironment);
     case 'payment_intent.payment_failed':
       return await handlePaymentFailed(baseUrl, serviceRoleKey, targetType, targetId, eventObject, metadata, stripeEnvironment);
     case 'checkout.session.expired':
@@ -134,6 +146,7 @@ Deno.serve(async (req) => {
 async function handleCheckoutSessionCompleted(
   baseUrl: string,
   serviceRoleKey: string,
+  fulfillmentAdminSecret: string | undefined,
   eventObject: StripeEventObject,
   metadata: Record<string, string>,
   targetType: PaymentTargetType,
@@ -156,6 +169,7 @@ async function handleCheckoutSessionCompleted(
       paymentIntentId
     );
     if (requestCheckoutPaid) {
+      scheduleAutomaticFulfillment(baseUrl, serviceRoleKey, fulfillmentAdminSecret, targetId);
       return jsonResponse(200, { ok: true, code: 'ORDER_AND_REQUEST_UPDATED' }, corsHeaders);
     }
 
@@ -165,6 +179,9 @@ async function handleCheckoutSessionCompleted(
     }
 
     if (isPaidOrProcessingTopUpOrder(order)) {
+      if (shouldScheduleAutomaticFulfillment(order)) {
+        scheduleAutomaticFulfillment(baseUrl, serviceRoleKey, fulfillmentAdminSecret, targetId);
+      }
       return jsonResponse(200, { ok: true, code: 'ALREADY_PROCESSED' }, corsHeaders);
     }
 
@@ -172,7 +189,7 @@ async function handleCheckoutSessionCompleted(
       return jsonResponse(200, { ok: true, code: 'REQUEST_CHECKOUT_STATE_CONFLICT' }, corsHeaders);
     }
 
-    await updateTopUpOrder(baseUrl, serviceRoleKey, targetId, {
+    const updated = await updateTopUpOrder(baseUrl, serviceRoleKey, targetId, {
       payment_status: 'paid',
       status: 'processing',
       paid_at: new Date().toISOString(),
@@ -180,6 +197,12 @@ async function handleCheckoutSessionCompleted(
       stripe_payment_intent_id: paymentIntentId,
       payment_provider: 'stripe',
     });
+
+    if (!updated) {
+      return jsonResponse(500, { ok: false, code: 'ORDER_UPDATE_FAILED' }, corsHeaders);
+    }
+
+    scheduleAutomaticFulfillment(baseUrl, serviceRoleKey, fulfillmentAdminSecret, targetId);
 
     return jsonResponse(200, { ok: true, code: 'ORDER_UPDATED' }, corsHeaders);
   }
@@ -209,6 +232,7 @@ async function handleCheckoutSessionCompleted(
 async function handlePaymentIntentSucceeded(
   baseUrl: string,
   serviceRoleKey: string,
+  fulfillmentAdminSecret: string | undefined,
   eventObject: StripeEventObject,
   metadata: Record<string, string>,
   targetType: PaymentTargetType,
@@ -231,6 +255,7 @@ async function handlePaymentIntentSucceeded(
       paymentIntentId
     );
     if (requestCheckoutPaid) {
+      scheduleAutomaticFulfillment(baseUrl, serviceRoleKey, fulfillmentAdminSecret, targetId);
       return jsonResponse(200, { ok: true, code: 'ORDER_AND_REQUEST_UPDATED' }, corsHeaders);
     }
 
@@ -240,6 +265,9 @@ async function handlePaymentIntentSucceeded(
     }
 
     if (isPaidOrProcessingTopUpOrder(order)) {
+      if (shouldScheduleAutomaticFulfillment(order)) {
+        scheduleAutomaticFulfillment(baseUrl, serviceRoleKey, fulfillmentAdminSecret, targetId);
+      }
       return jsonResponse(200, { ok: true, code: 'ALREADY_PROCESSED' }, corsHeaders);
     }
 
@@ -247,7 +275,7 @@ async function handlePaymentIntentSucceeded(
       return jsonResponse(200, { ok: true, code: 'REQUEST_CHECKOUT_STATE_CONFLICT' }, corsHeaders);
     }
 
-    await updateTopUpOrder(baseUrl, serviceRoleKey, targetId, {
+    const updated = await updateTopUpOrder(baseUrl, serviceRoleKey, targetId, {
       payment_status: 'paid',
       status: 'processing',
       paid_at: new Date().toISOString(),
@@ -255,6 +283,12 @@ async function handlePaymentIntentSucceeded(
       stripe_payment_intent_id: paymentIntentId,
       payment_provider: 'stripe',
     });
+
+    if (!updated) {
+      return jsonResponse(500, { ok: false, code: 'ORDER_UPDATE_FAILED' }, corsHeaders);
+    }
+
+    scheduleAutomaticFulfillment(baseUrl, serviceRoleKey, fulfillmentAdminSecret, targetId);
 
     return jsonResponse(200, { ok: true, code: 'ORDER_UPDATED' }, corsHeaders);
   }
@@ -393,6 +427,29 @@ async function handleCheckoutExpired(
   return jsonResponse(200, { ok: true, code: 'REQUEST_EXPIRED' }, corsHeaders);
 }
 
+function scheduleAutomaticFulfillment(
+  baseUrl: string,
+  serviceRoleKey: string,
+  fulfillmentAdminSecret: string | undefined,
+  orderId: string,
+) {
+  // Disabled unless FULFILLMENT_AUTO_SEND is exactly "true".
+  scheduleAutomaticFulfillmentRequest(
+    {
+      baseUrl,
+      serviceRoleKey,
+      fulfillmentAdminSecret,
+      orderId,
+      autoSendFlag: Deno.env.get(AUTOMATIC_FULFILLMENT_FLAG),
+    },
+    {
+      fetch: (input, init) => fetch(input, init),
+      waitUntil: (task) => EdgeRuntime.waitUntil(task),
+      logError: (...args) => console.error(...args),
+    },
+  );
+}
+
 function parseExpectedLivemode(value: string | undefined) {
   const normalized = value?.trim().toLowerCase();
   if (normalized === 'true') {
@@ -481,7 +538,7 @@ function timingSafeEqual(left: string, right: string) {
 
 async function fetchTopUpOrderById(baseUrl: string, serviceRoleKey: string, orderId: string) {
   const response = await fetch(
-    `${baseUrl}/rest/v1/topup_orders?id=eq.${encodeURIComponent(orderId)}&select=id,data_request_id,user_id,status,payment_status,supplier_status,stripe_checkout_session_id,stripe_payment_intent_id&limit=1`,
+    `${baseUrl}/rest/v1/topup_orders?id=eq.${encodeURIComponent(orderId)}&select=id,data_request_id,user_id,status,payment_status,supplier_status,supplier_reference,stripe_checkout_session_id,stripe_payment_intent_id&limit=1`,
     {
       headers: buildServiceHeaders(serviceRoleKey),
     }
@@ -575,11 +632,12 @@ async function updateTopUpOrder(
   orderId: string,
   patch: Record<string, string | null>
 ) {
-  await fetch(`${baseUrl}/rest/v1/topup_orders?id=eq.${encodeURIComponent(orderId)}`, {
+  const response = await fetch(`${baseUrl}/rest/v1/topup_orders?id=eq.${encodeURIComponent(orderId)}`, {
     method: 'PATCH',
     headers: buildServiceHeaders(serviceRoleKey),
     body: JSON.stringify(patch),
   });
+  return response.ok;
 }
 
 async function updateDataRequest(
